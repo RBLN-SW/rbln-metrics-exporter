@@ -1,0 +1,24 @@
+name: Golang Code build
+
+on:
+  workflow_call:
+
+jobs:
+  go-build:
+    name: golang build metrics exporter
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout code
+      - name: Read tool versions and setup Go
+        id: versions
+        run: |
+          GOLANG_VERSION=$(grep '^GOLANG_VERSION' versions.mk | cut -d'=' -f2 | tr -d ' ?')
+          echo "golang-version=${GOLANG_VERSION}" >> $GITHUB_OUTPUT
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.versions.outputs.golang-version }}
+          cache: true
+      - name: Build metrics exporter
+        run: make build

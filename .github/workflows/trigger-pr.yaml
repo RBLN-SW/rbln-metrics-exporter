@@ -1,0 +1,73 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  pr-title-validation:
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v5
+        with:
+          types: |
+            build
+            chore
+            ci
+            docs
+            feat
+            fix
+            perf
+            refactor
+            revert
+            style
+            test
+          scopes: |
+            .*
+          requireScope: false
+          subjectPattern: ^.{1,100}$
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  code-check:
+    needs: pr-title-validation
+    uses: ./.github/workflows/go-checks.yaml
+  go-build:
+    needs: pr-title-validation
+    uses: ./.github/workflows/go-build.yaml
+  build-image:
+    needs: [code-check, go-build]
+    name: Build RBLN metrics exporter image
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build image
+        env:
+          VERSION: "latest"
+          REGISTRY: docker.io/rebellions
+          PUSH_ON_BUILD: "false"
+          BUILD_MULTI_PLATFORM: "false" # TODO(mskim): revert when dedicated ARM runners become available
+        run: make build-image

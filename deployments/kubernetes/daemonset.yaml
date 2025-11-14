@@ -25,7 +25,7 @@ spec:
                 fieldRef:
                   fieldPath: status.hostIP
             - name: RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL
-              value: "http://$(NODE_IP):50051"
+              value: "$(NODE_IP):50051"
           resources:
             requests:
               cpu: "250m"

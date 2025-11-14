@@ -1,0 +1,59 @@
+---
+name: Feature Suggestion
+description: Suggest a new functionality or enhancement for rbln-metrics-exporter
+title: "[Feature]: "
+labels: enhancement
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to suggest a new feature for **rbln-metrics-exporter**!
+        Please fill in the details and help us understand your idea, why it matters and how it could be implemented.
+
+  - type: textarea
+    attributes:
+      label: Problem Statement
+      description: Describe the current issue or limitation that this feature would address.
+      placeholder: |
+        * What are you trying to accomplish?
+        * What is preventing you from accomplishing it today?
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Suggestion Description
+      description: Describe your idea or enhancement in detail.
+      placeholder: |
+        * What is the feature you’d like to see?
+        * Why would it be useful?
+        * How does it relate to existing functionality?
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Operating System / Platform
+      description: (Optional) If this feature is specific to a certain OS or platform.
+      placeholder: "e.g. Ubuntu 22.04, RHEL 9"
+
+  - type: input
+    attributes:
+      label: Kubernetes Environment
+      description: (Optional) Specify the Kubernetes distribution or environment you are using.
+      placeholder: "e.g. Vanilla Kubernetes, OpenShift 4.15"
+
+  - type: input
+    attributes:
+      label: Kubernetes Version
+      description: (Optional) Provide the version of Kubernetes in your environment.
+      placeholder: "e.g. v1.28.3"
+
+  - type: textarea
+    attributes:
+      label: Additional Context
+      description: Add any further context, screenshots, logs, links to proposals or references.
+    validations:
+      required: false

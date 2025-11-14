@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  code-check:
+    uses: ./.github/workflows/go-checks.yaml
+  go-build:
+    uses: ./.github/workflows/go-build.yaml
+  build-and-push-image:
+    needs: [code-check, go-build]
+    name: Build and push RBLN metrics exporter image
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build and push image
+        env:
+          VERSION: "latest"
+          REGISTRY: docker.io/rebellions
+          PUSH_ON_BUILD: "true"
+          BUILD_MULTI_PLATFORM: "false" # TODO(mskim): revert when dedicated ARM runners become available
+        run: make build-image

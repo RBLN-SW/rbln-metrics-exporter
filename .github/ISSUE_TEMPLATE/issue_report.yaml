@@ -1,0 +1,58 @@
+---
+name: Bug Report
+description: Report a bug or unexpected behavior in rbln-metrics-exporter.
+title: "[Bug]: "
+labels: bug
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug in **rbln-metrics-exporter**!
+        Please provide as much detail as possible so we can reproduce and fix the issue efficiently.
+
+  - type: textarea
+    attributes:
+      label: Problem Description
+      description: Describe the unexpected behavior or issue in detail.
+      placeholder: |
+        * What went wrong?
+        * What did you expect to happen instead?
+        * When did the issue start occurring?
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Kubernetes Environment
+      description: Specify the Kubernetes distribution or platform.
+      placeholder: "e.g. Vanilla Kubernetes, OpenShift 4.15"
+
+  - type: input
+    attributes:
+      label: Kubernetes Version
+      description: Provide the Kubernetes version in your environment.
+      placeholder: "e.g. v1.28.3"
+
+  - type: input
+    attributes:
+      label: Operating System / Platform
+      description: Mention the OS and version used on the nodes.
+      placeholder: "e.g. Ubuntu 22.04, RHEL 9"
+
+  - type: input
+    attributes:
+      label: Metrics Exporter Version
+      description: Specify the rbln-metrics-exporter version or image tag.
+      placeholder: "e.g. v0.1.3 or rebellions/rbln-metrics-exporter:v0.1.3"
+
+  - type: textarea
+    attributes:
+      label: Logs or Error Output
+      description: Include any relevant logs, error messages, or stack traces.
+      placeholder: |
+        * Pod logs:
+          ```
+          kubectl logs ds/rbln-metrics-exporter -n rbln-system
+          ```

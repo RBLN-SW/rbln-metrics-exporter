@@ -1,0 +1,132 @@
+name: Release Draft Pipeline
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-push-image:
+    name: Build and push image
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Build and push RBLN metrics exporter image
+        env:
+          VERSION: ${{ github.ref_name }}
+          REGISTRY: docker.io/rebellions
+          PUSH_ON_BUILD: "true"
+          BUILD_MULTI_PLATFORM: "false" # TODO(mskim): revert when dedicated ARM runners become available
+        run: make build-image
+
+  draft-release:
+    needs:
+      - build-and-push-image
+    runs-on: ubuntu-latest-rbln
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get previous tag
+        id: prev
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+          echo "previous_tag=$PREV_TAG" >> $GITHUB_ENV
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Generate release notes
+        run: |
+          CURRENT_TAG=${GITHUB_REF_NAME}
+          PREV_TAG=${previous_tag:-}
+
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..$CURRENT_TAG"
+          else
+            RANGE="$CURRENT_TAG"
+          fi
+
+          git log $RANGE --pretty=format:"%s" > commits.txt
+
+          FEATS=$(grep -E "^feat" commits.txt || true)
+          FIXES=$(grep -E "^fix" commits.txt || true)
+          DOCS=$(grep -E "^docs" commits.txt || true)
+          REFACTORS=$(grep -E "^refactor" commits.txt || true)
+          PERFS=$(grep -E "^perf" commits.txt || true)
+          STYLES=$(grep -E "^style" commits.txt || true)
+          BUILDS=$(grep -E "^build" commits.txt || true)
+          CHORES=$(grep -E "^chore" commits.txt || true)
+          TESTS=$(grep -E "^test" commits.txt || true)
+
+          {
+            echo "# Release Notes"
+            echo
+            echo "## New Features"
+            if [ -n "$FEATS" ]; then
+              echo "$FEATS" | sed 's/^/- /'
+            else
+              echo "- TBD"
+            fi
+            echo
+
+            echo "## Improvements"
+            IMPROVEMENTS=0
+
+            for GROUP in "$DOCS" "$REFACTORS" "$PERFS" "$STYLES" "$BUILDS" "$CHORES" "$TESTS"; do
+              if [ -n "$GROUP" ]; then
+                IMPROVEMENTS=1
+              fi
+            done
+
+            if [ $IMPROVEMENTS -eq 1 ]; then
+              [ -n "$DOCS" ] && echo "$DOCS" | sed 's/^/- /'
+              [ -n "$REFACTORS" ] && echo "$REFACTORS" | sed 's/^/- /'
+              [ -n "$PERFS" ] && echo "$PERFS" | sed 's/^/- /'
+              [ -n "$STYLES" ] && echo "$STYLES" | sed 's/^/- /'
+              [ -n "$BUILDS" ] && echo "$BUILDS" | sed 's/^/- /'
+              [ -n "$CHORES" ] && echo "$CHORES" | sed 's/^/- /'
+              [ -n "$TESTS" ] && echo "$TESTS" | sed 's/^/- /'
+            else
+              echo "- TBD"
+            fi
+            echo
+
+            echo "## Fixed Issues"
+            if [ -n "$FIXES" ]; then
+              echo "$FIXES" | sed 's/^/- /'
+            else
+              echo "- TBD"
+            fi
+            echo
+
+            echo "## Known Issues"
+            echo "- TBD"
+            echo
+            echo "_This draft was auto-generated for tag: ${CURRENT_TAG}_"
+          } > release_notes.md
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: "RBLN Metrics Exporter ${{ github.ref_name }} Release "
+          body_path: release_notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

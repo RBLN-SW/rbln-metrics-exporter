@@ -10,23 +10,17 @@ This repository contains Rebellions' NPU metrics exporter for [Prometheus](https
 
 ```bash
 $ rbln-metrics-exporter --help
-RBLN Metrics Exporter
+Expose RBLN device metrics via Prometheus
 
-Usage: rbln-metrics-exporter [OPTIONS]
+Usage:
+  rbln-metrics-exporter [flags]
 
-Options:
-      --rbln-daemon-url <rbln-daemon-url>
-          Endpoint to RBLN daemon grpc server [env: RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL=] [default: http://[::1]:50051]
-      --port <port>
-          Port to listen for requests [env: RBLN_METRICS_EXPORTER_PORT=] [default: 9090]
-      --interval <seconds>
-          Interval of collecting metrics (min: 1s, max: 60s) [env: RBLN_METRICS_EXPORTER_INTERVAL=] [default: 5]
-      --oneshot
-          Collect once and exit
-  -h, --help
-          Print help
-  -V, --version
-          Print version
+Flags:
+  -h, --help                     help for rbln-metrics-exporter
+      --interval int             Interval of collecting metrics (1-60 seconds) (default 5)
+      --oneshot                  Collect once and exit
+      --port int                 Port to listen for requests (default 9090)
+      --rbln-daemon-url string   Endpoint to RBLN daemon grpc server (default "127.0.0.1:50051")
 ```
 
 ## Metrics

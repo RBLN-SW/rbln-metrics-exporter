@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package rblnservices;
+
+option go_package = "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb";
+
+// RBLN API Services
+service RBLNServices {
+	// search device list with device name (e.g. 'rbln0')
+	rpc getDeviceList(Empty) returns (stream Device) {}
+    // search device list with device name (e.g. 'rbln0')
+    rpc getServiceableDeviceList(Empty) returns (stream Device) {}
+	// reset device from device name specified.
+	rpc resetDevice(Device) returns (StatusMsg) {}
+	// reset all device in system. it is equivalent with rsd reset.
+	rpc resetAllDevice(Empty) returns (StatusMsg) {}
+	// get version about firmware, smc and kernel.
+	rpc getVersion(Device) returns (VersionInfo) {}
+	// get hardware temperature and watt in device.
+	rpc getHWInfo(Device) returns (HWInfo) {}
+	// get device equipped ram size and memory size in use.
+	rpc getMemoryInfo(Device) returns (MemoryInfo) {}
+	// get device clock information.
+	rpc getClockInfo(Device) returns (ClockInfo) {}
+	// get hardware event generated and reported by kernel driver.
+	rpc getEventInfo(Device) returns (stream EventInfo) {}
+	// get total device info. for specified device.
+	// it includes device temperature, version, watt, memory info., clock info for specified device.
+	rpc getTotalInfo(Empty) returns (stream DeviceInfo) {}
+	// get utilization of NPU device
+	rpc getUtilization(Device) returns (UtilInfo) {}
+}
+
+enum Status {
+	// indicates valid data in message
+	SUCCEED = 0;
+	// indicates invalid data in message
+	FAILED = 1;
+}
+
+enum EventType {
+	// event does snot require response(daemon to kernel response)
+	NO_RESPONSE = 0;
+	// event requires response(daemon to kernel response)
+	RESPONSE_REQUIRED = 1;
+}
+
+enum EventSource {
+	// event occured from single device hard reset
+	SIGNLE_HARD_RESET = 0;
+	// event occured from rsd device hard reset
+	RSD_HARD_RESET = 1;
+	// event occured from TDR
+	TDR_EVENT = 2;
+	// event occured from CP event
+	CP_EVENT = 3;
+}
+
+
+message StatusMsg {
+	// just wrapper message for enum type data
+	Status err_status = 1;
+}
+
+message Device {
+	// device name (e.g. 'rbln0')
+	string name = 1;
+	// device id (e.g. '1120', '1121')
+	string dev_id = 2;
+	// device uuid (00000000-0000-0000-0000-000000000000 format)
+	string uuid = 3;
+}
+
+message ClockInfo {
+	// CP clock information (Mhz)
+	int32 cp_clock = 1;
+	// DNC1 clock information (Mhz)
+	int32 dc1_clock = 2;
+	// DNC2 clock information (Mhz)
+	int32 dc2_clock = 3;
+	// Bus clock information (Mhz)
+	int32 bus_clock = 4;
+	// SHM clock information (Mhz)
+	int32 shm_clock = 5;
+	// error status
+	Status err_status = 6;
+}
+
+message VersionInfo {
+	// Firmware version.
+	string fw_version = 1;
+	// Kernel driver version.
+	string drv_version = 2;
+	// SMC version.
+	string smc_version = 3;
+	// error status
+	Status err_status = 4;
+}
+
+message HWInfo {
+	// temperature in celsius unit.
+	float temperature = 1;
+	// hardware watt.
+	float watt = 2;
+	// error status
+	Status err_status = 3;
+}
+
+message MemoryInfo {
+	// device total memory (GB unit)
+	float total_mem = 1;
+	// device memory in use (GB unit)
+	float used_mem = 2;
+	// error status
+	Status err_status = 3;
+}
+
+message UtilInfo {
+	// utilization(percent) of device processing unit
+	float utilization = 1;
+	// error status
+	Status err_status = 2;
+}
+
+message EventInfo {
+	// device name
+	string dev_name = 1;
+	// event type
+	EventType event_type = 2;
+	// event value
+	EventSource value = 3;
+	// sub event value
+	int32 sub_value = 4;
+	// event trigger time (uptime)
+	double kernel_time = 5;
+	// UTC time with host time zone.
+	string utc_time = 6;
+}
+
+message DeviceInfo {
+	// device name
+	string name = 1;
+	// device uuid
+	string uuid = 2;
+	// device total memory (GB unit)
+	float total_mem = 3;
+	// device memory in use (GB unit)
+	float used_mem = 4;
+	// temperature in celsius unit.
+	float temperature = 5;
+	// hardware watt currently consumed
+	float watt = 6;
+	// firmware version
+	string fw_version = 7;
+	// kernel driver version
+	string drv_version = 8;
+	// device utilization
+	float utilization = 9;
+	// error status
+	Status err_status = 10;
+}
+
+message Empty {
+	// Just wrapper message to indicates dummy!
+}

@@ -1,0 +1,25 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+    - id: trailing-whitespace
+      stages: [pre-commit]
+      exclude: '^vendor/'
+    - id: end-of-file-fixer
+      stages: [pre-commit]
+      exclude: '^vendor/'
+    - id: check-added-large-files
+      stages: [pre-commit]
+      exclude: '^vendor/'
+    - id: check-merge-conflict
+      stages: [pre-commit]
+      exclude: '^vendor/'
+
+  - repo: local
+    hooks:
+      - id: go-code-check
+        name: Golang Code Quality Check
+        entry: make code-check
+        language: system
+        files: '\.go$'
+        pass_filenames: false
