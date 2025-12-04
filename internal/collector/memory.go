@@ -2,10 +2,13 @@ package collector
 
 import (
 	"context"
+	"math"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 )
+
+const gibToBytes = 1 << 30
 
 type MemoryCollector struct {
 	dramUsed          *prometheus.GaugeVec
@@ -21,13 +24,13 @@ func NewMemoryCollector(dClient *daemon.Client, isKubernetes bool, podResourceMa
 		dramUsed: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:DRAM_USED",
-				Help: "DRAM used (GiB)",
+				Help: "DRAM used (bytes)",
 			}, commonLabels,
 		),
 		dramTotal: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:DRAM_TOTAL",
-				Help: "DRAM total (GiB)",
+				Help: "DRAM total (bytes)",
 			}, commonLabels,
 		),
 		dClient:           dClient,
@@ -67,8 +70,12 @@ func (m *MemoryCollector) GetMetrics(ctx context.Context) error {
 			"pod":              podResourceInfo[DeviceName(s.Name)].Name,
 			"container":        podResourceInfo[DeviceName(s.Name)].ContainerName,
 		}
-		m.dramUsed.With(labels).Set(s.DRAMUsedGiB)
-		m.dramTotal.With(labels).Set(s.DRAMTotalGiB)
+
+		bytesUsed := uint64(math.Round(s.DRAMUsedGiB * float64(gibToBytes)))
+		bytesTotal := uint64(math.Round(s.DRAMTotalGiB * float64(gibToBytes)))
+
+		m.dramUsed.With(labels).Set(float64(bytesUsed))
+		m.dramTotal.With(labels).Set(float64(bytesTotal))
 	}
 	return nil
 }
