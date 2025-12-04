@@ -11,7 +11,6 @@ const (
 	container       = "container"
 	driverVersion   = "driver_version"
 	firmwareVersion = "firmware_version"
-	smcVersion      = "smc_version"
 )
 
 var commonLabels = []string{
@@ -25,5 +24,4 @@ var commonLabels = []string{
 	container,
 	driverVersion,
 	firmwareVersion,
-	smcVersion,
 }
