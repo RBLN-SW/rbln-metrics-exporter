@@ -2,7 +2,6 @@ package collector
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
@@ -44,11 +43,7 @@ func (h *HardwareInfoCollector) Register(registerer prometheus.Registerer) {
 }
 
 func (h *HardwareInfoCollector) GetMetrics(ctx context.Context) error {
-	podResourceInfo, err := h.podResourceMapper.GetResourcesInfo()
-	if err != nil {
-		slog.Error("Failed to get resources info", "error", err)
-		return err
-	}
+	podResourceInfo := h.podResourceMapper.Snapshot()
 
 	deviceStatus, err := h.dClient.GetDeviceStatus(ctx)
 	if err != nil {
@@ -68,9 +63,9 @@ func (h *HardwareInfoCollector) GetMetrics(ctx context.Context) error {
 			"driver_version":   s.DriverVersion,
 			"firmware_version": s.FirmwareVersion,
 			"smc_version":      s.SMCVersion,
-			"namespace":        podResourceInfo[s.Name].Namespace,
-			"pod":              podResourceInfo[s.Name].Name,
-			"container":        podResourceInfo[s.Name].ContainerName,
+			"namespace":        podResourceInfo[DeviceName(s.Name)].Namespace,
+			"pod":              podResourceInfo[DeviceName(s.Name)].Name,
+			"container":        podResourceInfo[DeviceName(s.Name)].ContainerName,
 		}
 		h.temperature.With(labels).Set(s.Temperature)
 		h.power.With(labels).Set(s.Power)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -19,24 +21,69 @@ const (
 	SysfsDriverPools   = "/sys/bus/pci/drivers/rebellions/%s/pools"
 )
 
+type DeviceName string
+
 type PodResourceInfo struct {
 	Name          string
 	Namespace     string
 	ContainerName string
 }
 
-type PodResourceMapper struct{}
-
-func NewPodResourceMapper() *PodResourceMapper {
-	return &PodResourceMapper{}
+type PodResourceMapper struct {
+	sync.RWMutex
+	podResourcesByDevice map[DeviceName]PodResourceInfo
+	syncRequests         chan struct{}
 }
 
-func (p *PodResourceMapper) GetResourcesInfo() (map[string]PodResourceInfo, error) {
-	podResourcesInfo := make(map[string]PodResourceInfo)
+func NewPodResourceMapper(ctx context.Context) *PodResourceMapper {
+	m := &PodResourceMapper{
+		podResourcesByDevice: make(map[DeviceName]PodResourceInfo),
+		syncRequests:         make(chan struct{}, 1),
+	}
+
+	if err := m.syncPodResources(); err != nil {
+		slog.Warn("initial pod resource sync failed", "err", err)
+	}
+
+	go m.runSyncLoop(ctx)
+	return m
+}
+
+func (p *PodResourceMapper) TriggerSync() {
+	select {
+	case p.syncRequests <- struct{}{}:
+	default:
+	}
+}
+
+func (p *PodResourceMapper) Snapshot() map[DeviceName]PodResourceInfo {
+	p.RLock()
+	defer p.RUnlock()
+
+	snapshot := make(map[DeviceName]PodResourceInfo, len(p.podResourcesByDevice))
+	maps.Copy(snapshot, p.podResourcesByDevice)
+	return snapshot
+}
+
+func (p *PodResourceMapper) runSyncLoop(ctx context.Context) {
+	for {
+		select {
+		case <-p.syncRequests:
+			if err := p.syncPodResources(); err != nil {
+				slog.Warn("Failed to sync pod resources", "err", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (p *PodResourceMapper) syncPodResources() error {
+	podResourcesInfo := make(map[DeviceName]PodResourceInfo)
 
 	podResources, err := p.getPodResources()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for _, pod := range podResources.GetPodResources() {
@@ -46,9 +93,9 @@ func (p *PodResourceMapper) GetResourcesInfo() (map[string]PodResourceInfo, erro
 					for _, deviceID := range containerDevice.GetDeviceIds() {
 						deviceName, err := getDeviceName(deviceID)
 						if err != nil {
-							return nil, err
+							return err
 						}
-						podResourcesInfo[deviceName] = PodResourceInfo{
+						podResourcesInfo[DeviceName(deviceName)] = PodResourceInfo{
 							Name:          pod.Name,
 							Namespace:     pod.Namespace,
 							ContainerName: container.Name,
@@ -59,7 +106,11 @@ func (p *PodResourceMapper) GetResourcesInfo() (map[string]PodResourceInfo, erro
 		}
 	}
 
-	return podResourcesInfo, nil
+	p.Lock()
+	defer p.Unlock()
+	p.podResourcesByDevice = podResourcesInfo
+
+	return nil
 }
 
 func (p *PodResourceMapper) getPodResources() (*podResourcesAPI.ListPodResourcesResponse, error) {

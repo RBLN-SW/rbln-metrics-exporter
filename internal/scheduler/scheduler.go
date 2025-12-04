@@ -9,18 +9,21 @@ import (
 )
 
 type Scheduler struct {
-	collectors []collector.Collector
-	interval   time.Duration
+	collectors        []collector.Collector
+	interval          time.Duration
+	podResourceMapper *collector.PodResourceMapper
 }
 
-func NewScheduler(collectors []collector.Collector, interval time.Duration) *Scheduler {
+func NewScheduler(podResourceMapper *collector.PodResourceMapper, collectors []collector.Collector, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		collectors: collectors,
-		interval:   interval,
+		collectors:        collectors,
+		interval:          interval,
+		podResourceMapper: podResourceMapper,
 	}
 }
 
 func (s *Scheduler) RunOnce(ctx context.Context) error {
+	s.podResourceMapper.TriggerSync()
 	for _, collector := range s.collectors {
 		if err := collector.GetMetrics(ctx); err != nil {
 			return err

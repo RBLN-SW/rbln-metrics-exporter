@@ -13,8 +13,7 @@ type collectorFactory struct {
 	nodeName          string
 }
 
-func NewCollectorFactory(registry prometheus.Registerer, dClient *daemon.Client, nodeName string) *collectorFactory {
-	podResourceMapper := NewPodResourceMapper()
+func NewCollectorFactory(podResourceMapper *PodResourceMapper, registry prometheus.Registerer, dClient *daemon.Client, nodeName string) *collectorFactory {
 	return &collectorFactory{
 		registry:          registry,
 		dClient:           dClient,

@@ -50,10 +50,11 @@ func Start(ctx context.Context, config Config) error {
 	}
 
 	metricRegistry := prometheus.NewRegistry()
-	collectorFactory := collector.NewCollectorFactory(metricRegistry, dClient, config.NodeName)
+	podResourceMapper := collector.NewPodResourceMapper(ctx)
+	collectorFactory := collector.NewCollectorFactory(podResourceMapper, metricRegistry, dClient, config.NodeName)
 	collectors := collectorFactory.NewCollectors()
 
-	sched := scheduler.NewScheduler(collectors, config.Interval)
+	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval)
 	go sched.Run(ctx)
 
 	server := server.NewMetricServer(metricRegistry, config.Port)
