@@ -92,6 +92,8 @@ kind: Service
 metadata:
   name: rbln-metrics-exporter-svc
   namespace: rbln-system
+  labels:
+    app.kubernetes.io/name: rbln-metrics-exporter
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/path: "/metrics"
@@ -100,4 +102,7 @@ spec:
   selector:
     app.kubernetes.io/name: rbln-metrics-exporter
   ports:
-    - port: 9090
+  - name: metrics
+    port: 9090
+    protocol: TCP
+    targetPort: 9090
