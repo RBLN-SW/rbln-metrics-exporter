@@ -111,7 +111,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 		}
 		if info, ok := totalMap[uuid]; ok {
 			di.Temperature = float64(info.GetTemperature())
-			di.Power = float64(info.GetWatt())
+			di.Power = float64(info.GetWatt()) / 1000.0 // scale for mW to W
 			di.DRAMTotalGiB = float64(info.GetTotalMem())
 			di.DRAMUsedGiB = float64(info.GetUsedMem())
 			di.Utilization = float64(info.GetUtilization())
