@@ -33,20 +33,33 @@ type PodResourceMapper struct {
 	sync.RWMutex
 	podResourcesByDevice map[DeviceName]PodResourceInfo
 	syncRequests         chan struct{}
+
+	client podResourcesAPI.PodResourcesListerClient
 }
 
-func NewPodResourceMapper(ctx context.Context) *PodResourceMapper {
+func NewPodResourceMapper(ctx context.Context) (*PodResourceMapper, error) {
+	conn, cleanup, err := newKubeletClient()
+	if err != nil {
+		return nil, err
+	}
+
 	m := &PodResourceMapper{
 		podResourcesByDevice: make(map[DeviceName]PodResourceInfo),
 		syncRequests:         make(chan struct{}, 1),
+		client:               podResourcesAPI.NewPodResourcesListerClient(conn),
 	}
 
 	if err := m.syncPodResources(); err != nil {
 		slog.Warn("initial pod resource sync failed", "err", err)
 	}
 
+	go func() {
+		<-ctx.Done()
+		cleanup()
+	}()
+
 	go m.runSyncLoop(ctx)
-	return m
+	return m, nil
 }
 
 func (p *PodResourceMapper) TriggerSync() {
@@ -114,18 +127,10 @@ func (p *PodResourceMapper) syncPodResources() error {
 }
 
 func (p *PodResourceMapper) getPodResources() (*podResourcesAPI.ListPodResourcesResponse, error) {
-	client, cleanup, err := newKubeletClient()
-	if err != nil {
-		return nil, err
-	}
-	defer cleanup()
-
-	podResourcesClient := podResourcesAPI.NewPodResourcesListerClient(client)
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	resp, err := podResourcesClient.List(ctx, &podResourcesAPI.ListPodResourcesRequest{})
+	resp, err := p.client.List(ctx, &podResourcesAPI.ListPodResourcesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod resources; err: %w", err)
 	}

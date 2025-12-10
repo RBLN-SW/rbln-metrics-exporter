@@ -50,7 +50,10 @@ func Start(ctx context.Context, config Config) error {
 	}
 
 	metricRegistry := prometheus.NewRegistry()
-	podResourceMapper := collector.NewPodResourceMapper(ctx)
+	podResourceMapper, err := collector.NewPodResourceMapper(ctx)
+	if err != nil {
+		return err
+	}
 	collectorFactory := collector.NewCollectorFactory(podResourceMapper, metricRegistry, dClient, config.NodeName)
 	collectors := collectorFactory.NewCollectors()
 
