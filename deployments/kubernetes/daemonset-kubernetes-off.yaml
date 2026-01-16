@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rbln-metrics-exporter
+  namespace: rbln-system
+  labels:
+    app.kubernetes.io/name: rbln-metrics-exporter
+    app.kubernetes.io/version: latest
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rbln-metrics-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rbln-metrics-exporter
+        app.kubernetes.io/version: latest
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: rebellions.ai/npu.deploy.metrics-exporter
+                    operator: In
+                    values:
+                      - "true"
+      containers:
+        - name: metrics-exporter
+          image: rebellions/rbln-metrics-exporter:latest
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: false
+          env:
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL
+              value: "$(NODE_IP):50051"
+            - name: RBLN_METRICS_EXPORTER_KUBERNETES_MODE
+              value: "off"
+          volumeMounts:
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
+            - name: sysfs
+              mountPath: /sys
+              readOnly: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "40Mi"
+            limits:
+              cpu: "1"
+              memory: "200Mi"
+      volumes:
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+            type: Directory
+        - name: sysfs
+          hostPath:
+            path: /sys
+            type: Directory
+      terminationGracePeriodSeconds: 0
+      # Uncomment below if you've installed RBLN NPU Feature Discovery
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #         - matchExpressions:
+      #             - key: rebellions.ai/npu.present
+      #               operator: In
+      #               values:
+      #                 - "true"
+      # Uncomment below if you want to schedule on any tainted nodes
+      # tolerations:
+      #   - key: ""
+      #     operator: Exists
+      #     effect: NoSchedule
+      #   - key: ""
+      #     operator: Exists
+      #     effect: NoExecute
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbln-metrics-exporter-service
+  namespace: rbln-system
+  labels:
+    app.kubernetes.io/name: rbln-metrics-exporter
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "9090"
+spec:
+  selector:
+    app.kubernetes.io/name: rbln-metrics-exporter
+  ports:
+  - name: metrics
+    port: 9090
+    protocol: TCP
+    targetPort: 9090

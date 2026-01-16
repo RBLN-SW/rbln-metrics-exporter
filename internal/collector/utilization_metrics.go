@@ -11,18 +11,21 @@ type UtilizationMetric struct {
 	utilization       *prometheus.GaugeVec
 	podResourceMapper *PodResourceMapper
 	nodeName          string
+	includePodLabels  bool
 }
 
-func NewUtilizationMetric(podResourceMapper *PodResourceMapper, nodeName string) *UtilizationMetric {
+func NewUtilizationMetric(podResourceMapper *PodResourceMapper, nodeName string, includePodLabels bool) *UtilizationMetric {
+	labels := labelNames(includePodLabels)
 	return &UtilizationMetric{
 		utilization: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:UTILIZATION",
 				Help: "Utilization (%)",
-			}, commonLabels,
+			}, labels,
 		),
 		podResourceMapper: podResourceMapper,
 		nodeName:          nodeName,
+		includePodLabels:  includePodLabels,
 	}
 }
 
@@ -38,18 +41,7 @@ func (u *UtilizationMetric) UpdateMetrics(ctx context.Context, devices []daemon.
 	podResourceInfo := u.podResourceMapper.Snapshot()
 
 	for _, device := range devices {
-		labels := prometheus.Labels{
-			"card":             device.Card,
-			"uuid":             device.UUID,
-			"name":             device.Name,
-			"deviceID":         device.DeviceID,
-			"hostname":         u.nodeName,
-			"driver_version":   device.DriverVersion,
-			"firmware_version": device.FirmwareVersion,
-			"namespace":        podResourceInfo[DeviceName(device.Name)].Namespace,
-			"pod":              podResourceInfo[DeviceName(device.Name)].Name,
-			"container":        podResourceInfo[DeviceName(device.Name)].ContainerName,
-		}
+		labels := buildLabels(device, u.nodeName, podResourceInfo, u.includePodLabels)
 		u.utilization.With(labels).Set(device.Utilization)
 	}
 }

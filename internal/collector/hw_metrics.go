@@ -12,24 +12,27 @@ type HardwareInfoMetric struct {
 	power             *prometheus.GaugeVec
 	podResourceMapper *PodResourceMapper
 	NodeName          string
+	includePodLabels  bool
 }
 
-func NewHardwareInfoMetric(podResourceMapper *PodResourceMapper, nodeName string) *HardwareInfoMetric {
+func NewHardwareInfoMetric(podResourceMapper *PodResourceMapper, nodeName string, includePodLabels bool) *HardwareInfoMetric {
+	labels := labelNames(includePodLabels)
 	return &HardwareInfoMetric{
 		temperature: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:TEMPERATURE",
 				Help: "NPU temperature (C)",
-			}, commonLabels,
+			}, labels,
 		),
 		power: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:CARD_POWER",
 				Help: "Card power usage (W)",
-			}, commonLabels,
+			}, labels,
 		),
 		podResourceMapper: podResourceMapper,
 		NodeName:          nodeName,
+		includePodLabels:  includePodLabels,
 	}
 }
 
@@ -47,18 +50,7 @@ func (h *HardwareInfoMetric) UpdateMetrics(ctx context.Context, devices []daemon
 	podResourceInfo := h.podResourceMapper.Snapshot()
 
 	for _, device := range devices {
-		labels := prometheus.Labels{
-			"card":             device.Card,
-			"uuid":             device.UUID,
-			"name":             device.Name,
-			"deviceID":         device.DeviceID,
-			"hostname":         h.NodeName,
-			"driver_version":   device.DriverVersion,
-			"firmware_version": device.FirmwareVersion,
-			"namespace":        podResourceInfo[DeviceName(device.Name)].Namespace,
-			"pod":              podResourceInfo[DeviceName(device.Name)].Name,
-			"container":        podResourceInfo[DeviceName(device.Name)].ContainerName,
-		}
+		labels := buildLabels(device, h.NodeName, podResourceInfo, h.includePodLabels)
 		h.temperature.With(labels).Set(device.Temperature)
 		h.power.With(labels).Set(device.Power)
 	}

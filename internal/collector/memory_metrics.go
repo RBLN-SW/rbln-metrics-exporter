@@ -15,24 +15,27 @@ type MemoryMetric struct {
 	dramTotal         *prometheus.GaugeVec
 	podResourceMapper *PodResourceMapper
 	nodeName          string
+	includePodLabels  bool
 }
 
-func NewMemoryMetric(podResourceMapper *PodResourceMapper, nodeName string) *MemoryMetric {
+func NewMemoryMetric(podResourceMapper *PodResourceMapper, nodeName string, includePodLabels bool) *MemoryMetric {
+	labels := labelNames(includePodLabels)
 	return &MemoryMetric{
 		dramUsed: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:DRAM_USED",
 				Help: "DRAM used (bytes)",
-			}, commonLabels,
+			}, labels,
 		),
 		dramTotal: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:DRAM_TOTAL",
 				Help: "DRAM total (bytes)",
-			}, commonLabels,
+			}, labels,
 		),
 		podResourceMapper: podResourceMapper,
 		nodeName:          nodeName,
+		includePodLabels:  includePodLabels,
 	}
 }
 
@@ -50,18 +53,7 @@ func (m *MemoryMetric) UpdateMetrics(ctx context.Context, devices []daemon.Devic
 	podResourceInfo := m.podResourceMapper.Snapshot()
 
 	for _, device := range devices {
-		labels := prometheus.Labels{
-			"card":             device.Card,
-			"uuid":             device.UUID,
-			"name":             device.Name,
-			"deviceID":         device.DeviceID,
-			"hostname":         m.nodeName,
-			"driver_version":   device.DriverVersion,
-			"firmware_version": device.FirmwareVersion,
-			"namespace":        podResourceInfo[DeviceName(device.Name)].Namespace,
-			"pod":              podResourceInfo[DeviceName(device.Name)].Name,
-			"container":        podResourceInfo[DeviceName(device.Name)].ContainerName,
-		}
+		labels := buildLabels(device, m.nodeName, podResourceInfo, m.includePodLabels)
 
 		bytesUsed := uint64(math.Round(device.DRAMUsedGiB * float64(gibToBytes)))
 		bytesTotal := uint64(math.Round(device.DRAMTotalGiB * float64(gibToBytes)))

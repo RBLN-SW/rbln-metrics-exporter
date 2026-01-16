@@ -17,10 +17,10 @@ type NPUCollector struct {
 
 func NewNPUCollector(dClient *daemon.Client, registry prometheus.Registerer, isKubernetes bool, podResourceMapper *PodResourceMapper, nodeName string) *NPUCollector {
 	metrics := []Metric{
-		NewHardwareInfoMetric(podResourceMapper, nodeName),
-		NewDeviceHealthMetric(podResourceMapper, nodeName),
-		NewMemoryMetric(podResourceMapper, nodeName),
-		NewUtilizationMetric(podResourceMapper, nodeName),
+		NewHardwareInfoMetric(podResourceMapper, nodeName, isKubernetes),
+		NewDeviceHealthMetric(podResourceMapper, nodeName, isKubernetes),
+		NewMemoryMetric(podResourceMapper, nodeName, isKubernetes),
+		NewUtilizationMetric(podResourceMapper, nodeName, isKubernetes),
 	}
 
 	return &NPUCollector{

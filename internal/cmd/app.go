@@ -50,11 +50,17 @@ func Start(ctx context.Context, config Config) error {
 	}
 
 	metricRegistry := prometheus.NewRegistry()
-	podResourceMapper, err := collector.NewPodResourceMapper(ctx)
-	if err != nil {
-		return err
+	isKubernetes := resolveKubernetesMode(config.KubernetesMode)
+	var podResourceMapper *collector.PodResourceMapper
+	if isKubernetes {
+		podResourceMapper, err = collector.NewPodResourceMapper(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		podResourceMapper = collector.NewNoopPodResourceMapper()
 	}
-	collectorFactory := collector.NewCollectorFactory(podResourceMapper, metricRegistry, dClient, config.NodeName)
+	collectorFactory := collector.NewCollectorFactory(podResourceMapper, metricRegistry, dClient, config.NodeName, isKubernetes)
 	collectors := collectorFactory.NewCollectors()
 
 	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval)
@@ -67,4 +73,15 @@ func Start(ctx context.Context, config Config) error {
 	}
 
 	return nil
+}
+
+func resolveKubernetesMode(mode string) bool {
+	switch mode {
+	case KubernetesModeOn:
+		return true
+	case KubernetesModeOff:
+		return false
+	default:
+		return collector.IsKubernetes()
+	}
 }

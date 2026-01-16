@@ -11,18 +11,21 @@ type DeviceHealthMetric struct {
 	healthStatus      *prometheus.GaugeVec
 	podResourceMapper *PodResourceMapper
 	NodeName          string
+	includePodLabels  bool
 }
 
-func NewDeviceHealthMetric(podResourceMapper *PodResourceMapper, nodeName string) *DeviceHealthMetric {
+func NewDeviceHealthMetric(podResourceMapper *PodResourceMapper, nodeName string, includePodLabels bool) *DeviceHealthMetric {
+	labels := labelNames(includePodLabels)
 	return &DeviceHealthMetric{
 		healthStatus: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "RBLN_DEVICE_STATUS:HEALTH",
 				Help: "NPU health status",
-			}, commonLabels,
+			}, labels,
 		),
 		podResourceMapper: podResourceMapper,
 		NodeName:          nodeName,
+		includePodLabels:  includePodLabels,
 	}
 }
 
@@ -38,18 +41,7 @@ func (d *DeviceHealthMetric) UpdateMetrics(ctx context.Context, devices []daemon
 	podResourceInfo := d.podResourceMapper.Snapshot()
 
 	for _, device := range devices {
-		labels := prometheus.Labels{
-			"card":             device.Card,
-			"uuid":             device.UUID,
-			"name":             device.Name,
-			"deviceID":         device.DeviceID,
-			"hostname":         d.NodeName,
-			"driver_version":   device.DriverVersion,
-			"firmware_version": device.FirmwareVersion,
-			"namespace":        podResourceInfo[DeviceName(device.Name)].Namespace,
-			"pod":              podResourceInfo[DeviceName(device.Name)].Name,
-			"container":        podResourceInfo[DeviceName(device.Name)].ContainerName,
-		}
+		labels := buildLabels(device, d.NodeName, podResourceInfo, d.includePodLabels)
 		d.healthStatus.With(labels).Set(float64(device.DeviceStatus))
 	}
 }

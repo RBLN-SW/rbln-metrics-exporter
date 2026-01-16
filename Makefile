@@ -28,6 +28,8 @@ ifeq ($(BUILD_MULTI_PLATFORM),true)
 	BUILDX = buildx
 else
 	DOCKER_BUILD_PLATFORM_OPTIONS := --platform=linux/amd64
+	# Avoid buildx-only --output flags when not using buildx
+	DOCKER_BUILD_OPTIONS :=
 endif
 
 # Image registry and naming configuration

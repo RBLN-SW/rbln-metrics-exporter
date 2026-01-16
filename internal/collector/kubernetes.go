@@ -63,6 +63,9 @@ func NewPodResourceMapper(ctx context.Context) (*PodResourceMapper, error) {
 }
 
 func (p *PodResourceMapper) TriggerSync() {
+	if p == nil || p.syncRequests == nil {
+		return
+	}
 	select {
 	case p.syncRequests <- struct{}{}:
 	default:
@@ -172,4 +175,10 @@ func IsKubernetes() bool {
 		return true
 	}
 	return false
+}
+
+func NewNoopPodResourceMapper() *PodResourceMapper {
+	return &PodResourceMapper{
+		podResourcesByDevice: make(map[DeviceName]PodResourceInfo),
+	}
 }

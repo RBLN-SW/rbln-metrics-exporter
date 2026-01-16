@@ -13,11 +13,11 @@ type collectorFactory struct {
 	nodeName          string
 }
 
-func NewCollectorFactory(podResourceMapper *PodResourceMapper, registry prometheus.Registerer, dClient *daemon.Client, nodeName string) *collectorFactory {
+func NewCollectorFactory(podResourceMapper *PodResourceMapper, registry prometheus.Registerer, dClient *daemon.Client, nodeName string, isKubernetes bool) *collectorFactory {
 	return &collectorFactory{
 		registry:          registry,
 		dClient:           dClient,
-		isKubernetes:      IsKubernetes(),
+		isKubernetes:      isKubernetes,
 		podResourceMapper: podResourceMapper,
 		nodeName:          nodeName,
 	}

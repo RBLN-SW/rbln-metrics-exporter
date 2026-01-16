@@ -16,11 +16,12 @@ const (
 )
 
 type Config struct {
-	RBLNDaemonURL string
-	Port          int
-	Interval      time.Duration
-	Oneshot       bool
-	NodeName      string
+	RBLNDaemonURL  string
+	Port           int
+	Interval       time.Duration
+	Oneshot        bool
+	NodeName       string
+	KubernetesMode string
 }
 
 type configBuilder struct {
@@ -30,11 +31,12 @@ type configBuilder struct {
 
 func newConfigBuilder(getenv func(string) string) *configBuilder {
 	cfg := Config{
-		RBLNDaemonURL: getenvDefault(getenv, "RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL", "127.0.0.1:50051"),
-		Port:          getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_PORT", 9090),
-		Interval:      time.Duration(getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_INTERVAL", 5)) * time.Second,
-		Oneshot:       getenvBoolDefault(getenv, "RBLN_METRICS_EXPORTER_ONESHOT", false),
-		NodeName:      detectNodeName(getenv, "NODE_NAME", "unknown"),
+		RBLNDaemonURL:  getenvDefault(getenv, "RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL", "127.0.0.1:50051"),
+		Port:           getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_PORT", 9090),
+		Interval:       time.Duration(getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_INTERVAL", 5)) * time.Second,
+		Oneshot:        getenvBoolDefault(getenv, "RBLN_METRICS_EXPORTER_ONESHOT", false),
+		NodeName:       detectNodeName(getenv, "NODE_NAME", "unknown"),
+		KubernetesMode: getenvDefault(getenv, "RBLN_METRICS_EXPORTER_KUBERNETES_MODE", KubernetesModeAuto),
 	}
 
 	return &configBuilder{
@@ -49,6 +51,7 @@ func (b *configBuilder) bindFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&b.intervalSec, "interval", b.intervalSec, fmt.Sprintf("Interval of collecting metrics (%d-%d seconds)", MinIntervalSeconds, MaxIntervalSeconds))
 	fs.BoolVar(&b.cfg.Oneshot, "oneshot", b.cfg.Oneshot, "Collect once and exit")
 	fs.StringVar(&b.cfg.NodeName, "node-name", b.cfg.NodeName, "Name of the node")
+	fs.StringVar(&b.cfg.KubernetesMode, "kubernetes-mode", b.cfg.KubernetesMode, "Kubernetes mode: auto, on, off")
 }
 
 func (b *configBuilder) finalize() error {
@@ -56,6 +59,12 @@ func (b *configBuilder) finalize() error {
 		return fmt.Errorf("interval must be %d-%d seconds", MinIntervalSeconds, MaxIntervalSeconds)
 	}
 	b.cfg.Interval = time.Duration(b.intervalSec) * time.Second
+	b.cfg.KubernetesMode = strings.ToLower(b.cfg.KubernetesMode)
+	switch b.cfg.KubernetesMode {
+	case KubernetesModeAuto, KubernetesModeOn, KubernetesModeOff:
+	default:
+		return fmt.Errorf("kubernetes-mode must be one of %q, %q, %q", KubernetesModeAuto, KubernetesModeOn, KubernetesModeOff)
+	}
 	// Deprecated compatibility shim: remove when inputs no longer include http(s) schemes.
 	b.cfg.RBLNDaemonURL = stripSchemePrefix(b.cfg.RBLNDaemonURL)
 	return nil
@@ -110,3 +119,9 @@ func detectNodeName(getenv func(string) string, key string, def string) string {
 	}
 	return def
 }
+
+const (
+	KubernetesModeAuto = "auto"
+	KubernetesModeOn   = "on"
+	KubernetesModeOff  = "off"
+)
