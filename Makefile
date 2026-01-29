@@ -22,10 +22,19 @@ PUSH_ON_BUILD ?= false
 BUILD_MULTI_PLATFORM ?= false
 DOCKER_BUILD_OPTIONS ?= --output=type=image,push=$(PUSH_ON_BUILD)
 BUILDX =
+USE_BUILDX = $(BUILD_MULTI_PLATFORM)
 
+ifneq ($(PUSH_ON_BUILD),false)
+	USE_BUILDX = true
+endif
+
+ifeq ($(USE_BUILDX),true)
+	BUILDX = buildx
 ifeq ($(BUILD_MULTI_PLATFORM),true)
 	DOCKER_BUILD_PLATFORM_OPTIONS ?= --platform=linux/amd64,linux/arm64
-	BUILDX = buildx
+else
+	DOCKER_BUILD_PLATFORM_OPTIONS ?= --platform=linux/amd64
+endif
 else
 	DOCKER_BUILD_PLATFORM_OPTIONS := --platform=linux/amd64
 	# Avoid buildx-only --output flags when not using buildx

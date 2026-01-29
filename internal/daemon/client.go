@@ -25,6 +25,11 @@ var cardNameMap = map[string]string{
 	"1250": "RBLN-CA25",
 }
 
+const (
+	milliCelsiusToCelsius = 1000.0
+	microWattToWatt       = 1_000_000.0
+)
+
 func cardNameFromDevID(devID string) string {
 	if n, ok := cardNameMap[devID]; ok {
 		return n
@@ -110,8 +115,9 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			Card:     cardNameFromDevID(dev.GetDevId()),
 		}
 		if info, ok := totalMap[uuid]; ok {
-			di.Temperature = float64(info.GetTemperature())
-			di.Power = float64(info.GetWatt())
+			// SMI now reports temperature in milli-Celsius and power in micro-Watts.
+			di.Temperature = float64(info.GetTemperature()) / milliCelsiusToCelsius
+			di.Power = float64(info.GetWatt()) / microWattToWatt
 			di.DRAMTotalGiB = float64(info.GetTotalMem())
 			di.DRAMUsedGiB = float64(info.GetUsedMem())
 			di.Utilization = float64(info.GetUtilization())
