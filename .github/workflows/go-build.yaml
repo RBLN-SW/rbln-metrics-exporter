@@ -6,7 +6,7 @@ on:
 jobs:
   go-build:
     name: golang build metrics exporter
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         name: Checkout code

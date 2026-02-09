@@ -17,7 +17,7 @@ jobs:
   build-and-push-image:
     needs: [code-check, go-build]
     name: Build and push RBLN metrics exporter image
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
