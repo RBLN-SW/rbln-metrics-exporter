@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-push-image:
     name: Build and push image
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
   draft-release:
     needs:
       - build-and-push-image
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4

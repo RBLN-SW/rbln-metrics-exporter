@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   pr-title-validation:
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - name: Validate PR title
         uses: amannn/action-semantic-pull-request@v5
@@ -49,7 +49,7 @@ jobs:
   build-image:
     needs: [code-check, go-build]
     name: Build RBLN metrics exporter image
-    runs-on: ubuntu-latest-rbln
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
