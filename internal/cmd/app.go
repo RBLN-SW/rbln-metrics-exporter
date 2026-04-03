@@ -40,7 +40,7 @@ func Start(ctx context.Context, config Config) error {
 	slog.Info("Starting rbln-metrics-exporter", "config", config)
 	if os.Getenv("PROMETHEUS_METRIC_NAMES") != "true" {
 		slog.Warn(
-			"legacy metric names are deprecated and will be removed in the next version",
+			"legacy metric names are deprecated and will be removed in the next version; set PROMETHEUS_METRIC_NAMES=true to enable the new metric names",
 			"env", "PROMETHEUS_METRIC_NAMES",
 		)
 	}
