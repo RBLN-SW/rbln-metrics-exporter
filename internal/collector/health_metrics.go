@@ -19,7 +19,7 @@ func NewDeviceHealthMetric(podResourceMapper *PodResourceMapper, nodeName string
 	return &DeviceHealthMetric{
 		healthStatus: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:HEALTH",
+				Name: metricName("RBLN_DEVICE_STATUS:HEALTH", "rbln_npu_health"),
 				Help: "NPU health status",
 			}, labels,
 		),

@@ -147,16 +147,14 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 
 ## Metrics Reference
 
-All metrics share the `RBLN_DEVICE_STATUS:` prefix and are reported as Prometheus gauges per device.
-
 | Name | Description | Unit |
 | --- | --- | --- |
-| `RBLN_DEVICE_STATUS:TEMPERATURE` | Device temperature | °C |
-| `RBLN_DEVICE_STATUS:CARD_POWER` | Card power draw | W |
-| `RBLN_DEVICE_STATUS:DRAM_USED` | DRAM currently in use | GiB |
-| `RBLN_DEVICE_STATUS:DRAM_TOTAL` | Total DRAM | GiB |
-| `RBLN_DEVICE_STATUS:UTILIZATION` | SM utilization | % |
-| `RBLN_DEVICE_STATUS:HEALTH` | Binary health (0 = active, 1 = inactive) | 0/1 |
+| `rbln_npu_temperature` | Device temperature | °C |
+| `rbln_npu_power` | Card power draw | W |
+| `rbln_npu_memory_used` | DRAM currently in use | bytes |
+| `rbln_npu_memory_total` | Total DRAM | bytes |
+| `rbln_npu_utilization` | SM utilization | % |
+| `rbln_npu_health` | Binary health (0 = active, 1 = inactive) | 0/1 |
 
 ### Common Label Set
 
@@ -182,12 +180,12 @@ All metrics share the `RBLN_DEVICE_STATUS:` prefix and are reported as Prometheu
 ### Example Output
 
 ```text
-# TYPE RBLN_DEVICE_STATUS:DRAM_TOTAL gauge
-RBLN_DEVICE_STATUS:DRAM_TOTAL{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln0",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="55668c63-d739-4193-8212-ad7ba933520c"} 15.71875
-# TYPE RBLN_DEVICE_STATUS:TEMPERATURE gauge
-RBLN_DEVICE_STATUS:TEMPERATURE{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln1",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="84389d45-ebf3-4b74-9d80-6ec8a09d8be4"} 54
-# HELP RBLN_DEVICE_STATUS:HEALTH NPU health status
-RBLN_DEVICE_STATUS:HEALTH{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln3",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="8e65fc0d-df7d-4e21-a81b-a76a1a1e69ab"} 0
+# TYPE rbln_npu_memory_total gauge
+rbln_npu_memory_total{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln0",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="55668c63-d739-4193-8212-ad7ba933520c"} 16877882368
+# TYPE rbln_npu_temperature gauge
+rbln_npu_temperature{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln1",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="84389d45-ebf3-4b74-9d80-6ec8a09d8be4"} 54
+# HELP rbln_npu_health NPU health status
+rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln3",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="8e65fc0d-df7d-4e21-a81b-a76a1a1e69ab"} 0
 ```
 
 ---
