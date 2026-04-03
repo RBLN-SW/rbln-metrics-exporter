@@ -23,13 +23,13 @@ func NewMemoryMetric(podResourceMapper *PodResourceMapper, nodeName string, incl
 	return &MemoryMetric{
 		dramUsed: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:DRAM_USED",
+				Name: metricName("RBLN_DEVICE_STATUS:DRAM_USED", "rbln_npu_memory_used"),
 				Help: "DRAM used (bytes)",
 			}, labels,
 		),
 		dramTotal: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:DRAM_TOTAL",
+				Name: metricName("RBLN_DEVICE_STATUS:DRAM_TOTAL", "rbln_npu_memory_total"),
 				Help: "DRAM total (bytes)",
 			}, labels,
 		),

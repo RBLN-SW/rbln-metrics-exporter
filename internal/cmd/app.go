@@ -38,6 +38,12 @@ func NewApp() *cobra.Command {
 
 func Start(ctx context.Context, config Config) error {
 	slog.Info("Starting rbln-metrics-exporter", "config", config)
+	if os.Getenv("PROMETHEUS_METRIC_NAMES") != "true" {
+		slog.Warn(
+			"legacy metric names are deprecated and will be removed in the next version",
+			"env", "PROMETHEUS_METRIC_NAMES",
+		)
+	}
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
@@ -60,7 +66,13 @@ func Start(ctx context.Context, config Config) error {
 	} else {
 		podResourceMapper = collector.NewNoopPodResourceMapper()
 	}
-	collectorFactory := collector.NewCollectorFactory(podResourceMapper, metricRegistry, dClient, config.NodeName, isKubernetes)
+	collectorFactory := collector.NewCollectorFactory(
+		podResourceMapper,
+		metricRegistry,
+		dClient,
+		config.NodeName,
+		isKubernetes,
+	)
 	collectors := collectorFactory.NewCollectors()
 
 	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval)

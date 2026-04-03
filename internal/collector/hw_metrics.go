@@ -20,13 +20,13 @@ func NewHardwareInfoMetric(podResourceMapper *PodResourceMapper, nodeName string
 	return &HardwareInfoMetric{
 		temperature: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:TEMPERATURE",
+				Name: metricName("RBLN_DEVICE_STATUS:TEMPERATURE", "rbln_npu_temperature"),
 				Help: "NPU temperature (C)",
 			}, labels,
 		),
 		power: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:CARD_POWER",
+				Name: metricName("RBLN_DEVICE_STATUS:CARD_POWER", "rbln_npu_power"),
 				Help: "Card power usage (W)",
 			}, labels,
 		),

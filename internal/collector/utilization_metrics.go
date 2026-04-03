@@ -19,7 +19,7 @@ func NewUtilizationMetric(podResourceMapper *PodResourceMapper, nodeName string,
 	return &UtilizationMetric{
 		utilization: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
-				Name: "RBLN_DEVICE_STATUS:UTILIZATION",
+				Name: metricName("RBLN_DEVICE_STATUS:UTILIZATION", "rbln_npu_utilization"),
 				Help: "Utilization (%)",
 			}, labels,
 		),
