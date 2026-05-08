@@ -18,7 +18,6 @@ import (
 const (
 	PodResourceSocket  = "/var/lib/kubelet/pod-resources/kubelet.sock"
 	RBLNResourcePrefix = "rebellions.ai"
-	SysfsDriverPools   = "/sys/bus/pci/drivers/rebellions/%s/pools"
 )
 
 type DeviceName string
@@ -107,11 +106,7 @@ func (p *PodResourceMapper) syncPodResources() error {
 			for _, containerDevice := range container.GetDevices() {
 				if strings.HasPrefix(containerDevice.GetResourceName(), RBLNResourcePrefix) {
 					for _, deviceID := range containerDevice.GetDeviceIds() {
-						deviceName, err := getDeviceName(deviceID)
-						if err != nil {
-							return err
-						}
-						podResourcesInfo[DeviceName(deviceName)] = PodResourceInfo{
+						podResourcesInfo[DeviceName(deviceID)] = PodResourceInfo{
 							Name:          pod.Name,
 							Namespace:     pod.Namespace,
 							ContainerName: container.Name,
@@ -153,18 +148,6 @@ func newKubeletClient() (*grpc.ClientConn, func(), error) {
 	return conn, func() {
 		_ = conn.Close()
 	}, nil
-}
-
-func getDeviceName(pciAddress string) (string, error) {
-	poolsFilePath := fmt.Sprintf(SysfsDriverPools, pciAddress)
-	poolsFile, err := os.ReadFile(poolsFilePath)
-	if err != nil {
-		slog.Error("Failed to read", "file", poolsFilePath, "err", err)
-		return "", fmt.Errorf("failed to read %s, %w", poolsFilePath, err)
-	}
-
-	deviceName := strings.Split(strings.Split(string(poolsFile), "\n")[1], " ")[0]
-	return deviceName, nil
 }
 
 func IsKubernetes() bool {
