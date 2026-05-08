@@ -2,3 +2,6 @@
 bin/*
 
 .go-version
+
+CLAUDE.md
+.claude
