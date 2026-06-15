@@ -24,13 +24,23 @@ DOCKER_BUILD_OPTIONS ?= --output=type=image,push=$(PUSH_ON_BUILD)
 BUILDX =
 USE_BUILDX = $(BUILD_MULTI_PLATFORM)
 
+# PLATFORM can be set to a single platform (e.g. linux/amd64, linux/arm64)
+# to override the default platform logic.
+PLATFORM ?=
+
 ifneq ($(PUSH_ON_BUILD),false)
+	USE_BUILDX = true
+endif
+
+ifneq ($(PLATFORM),)
 	USE_BUILDX = true
 endif
 
 ifeq ($(USE_BUILDX),true)
 	BUILDX = buildx
-ifeq ($(BUILD_MULTI_PLATFORM),true)
+ifneq ($(PLATFORM),)
+	DOCKER_BUILD_PLATFORM_OPTIONS := --platform=$(PLATFORM)
+else ifeq ($(BUILD_MULTI_PLATFORM),true)
 	DOCKER_BUILD_PLATFORM_OPTIONS ?= --platform=linux/amd64,linux/arm64
 else
 	DOCKER_BUILD_PLATFORM_OPTIONS ?= --platform=linux/amd64
