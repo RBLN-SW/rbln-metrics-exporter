@@ -1,0 +1,190 @@
+# PR CI for rbln-metrics-exporter: build the PR image, then run the
+# operator's sentinel `install` scenario with ONLY the metrics-exporter
+# operand pointed at the PR image.
+
+notify:
+  - github_commit_status:
+      context: "[Metrics Exporter] PR CI"
+
+env:
+  HARBOR_HOST: harbor.k8s.rebellions.in
+  IMAGE_REGISTRY: harbor.k8s.rebellions.in/rebellions
+  BUILDX_CI_IMAGE: harbor.k8s.rebellions.in/rebellions/buildx-ci:latest
+
+  # Baseline operator chart. The cloned chart's Chart.yaml appVersion is a v0.0.1
+  # placeholder (only release packaging rewrites it), so operator/validator
+  # images are pinned explicitly below instead of left to the chart default.
+  OPERATOR_REPO: https://github.com/RBLN-SW/rbln-npu-operator.git
+  OPERATOR_REF: "${OPERATOR_REF:-main}"
+  OPERATOR_DIR: rbln-npu-operator
+  OPERATOR_CHART_SUBPATH: deployments/rbln-npu-operator
+
+  # operator main publishes to Harbor as :dev (not docker.io); Always-pull since
+  # :dev is a moving tag.
+  SENTINEL_OPERATOR_REGISTRY: harbor.k8s.rebellions.in
+  SENTINEL_OPERATOR_REPOSITORY: rebellions/rbln-npu-operator
+  SENTINEL_OPERATOR_VERSION: "${SENTINEL_OPERATOR_VERSION:-dev}"
+  SENTINEL_OPERATOR_PULL_POLICY: Always
+  SENTINEL_VALIDATOR_REGISTRY: harbor.k8s.rebellions.in
+  SENTINEL_VALIDATOR_REPOSITORY: rebellions/rbln-npu-operator-validator
+  SENTINEL_VALIDATOR_VERSION: "${SENTINEL_VALIDATOR_VERSION:-dev}"
+  SENTINEL_VALIDATOR_PULL_POLICY: Always
+
+  SENTINEL_REPO: https://github.com/rebellions-sw/npu-operator-sentinel.git
+  SENTINEL_REF: "${SENTINEL_REF:-dev}"
+  SENTINEL_DIR: npu-operator-sentinel
+  SENTINEL_RUNNER_IMAGE: harbor.k8s.rebellions.in/rebellions/npu-operator-sentinel:latest
+
+  # No dedicated namespace: the shared cluster lock (install step) serializes
+  # runs, so we use the operator's standard rbln-system.
+  TEST_NAMESPACE: "${TEST_NAMESPACE:-rbln-system}"
+
+  # Driver/daemon chart defaults (repo.rebellions.ai) aren't pullable yet, so
+  # override to the dev registry — same values as the operator nightly.
+  SENTINEL_DRIVER_IMAGE_REGISTRY: harbor.ssw.rbln.in
+  SENTINEL_DRIVER_IMAGE_REPOSITORY: rebellions-dev/rbln-driver
+  SENTINEL_DRIVER_IMAGE_TAG: "${SENTINEL_DRIVER_IMAGE_TAG:-3.2.0}"
+  SENTINEL_RBLN_DAEMON_IMAGE_REGISTRY: harbor.ssw.rbln.in
+  SENTINEL_RBLN_DAEMON_IMAGE_REPOSITORY: rebellions-dev/rbln-daemon
+  SENTINEL_RBLN_DAEMON_IMAGE_TAG: "${SENTINEL_RBLN_DAEMON_IMAGE_TAG:-3.2.0}"
+
+agents:
+  queue: "k8s"
+
+steps:
+  # DinD: buildx-ci (docker CLI) + privileged docker:dind sidecar over DOCKER_HOST.
+  - label: ":docker: build & push image"
+    key: build-image
+    timeout_in_minutes: 30
+    image: ${BUILDX_CI_IMAGE}
+    env:
+      DOCKER_HOST: tcp://localhost:2375
+    secrets:
+      REBEL_SW_DEV_USERNAME: REBEL_SW_DEV_USERNAME
+      REBEL_SW_DEV_PASSWORD: REBEL_SW_DEV_PASSWORD
+    plugins:
+      - kubernetes:
+          sidecars:
+            - image: harbor.k8s.rebellions.in/dockerhub-proxy/docker:dind
+              command: [dockerd-entrypoint.sh]
+              securityContext:
+                privileged: true
+              env:
+                - name: DOCKER_TLS_CERTDIR
+                  value: ""
+    notify:
+      - github_commit_status:
+          context: "[Metrics Exporter] Build Image"
+    command: |
+      set -euo pipefail
+
+      echo "waiting for dockerd sidecar..."
+      for i in $$(seq 1 90); do
+        docker info >/dev/null 2>&1 && break
+        sleep 2
+      done
+      if ! docker info >/dev/null 2>&1; then
+        echo "::error:: dockerd sidecar did not become ready"
+        docker info 2>&1 || true
+        exit 1
+      fi
+
+      docker buildx create --use --name ci-builder --driver docker-container
+
+      IMAGE_TAG="$${BUILDKITE_COMMIT:0:8}"
+
+      echo "$$REBEL_SW_DEV_PASSWORD" | docker login "${HARBOR_HOST}" \
+        --username "$$REBEL_SW_DEV_USERNAME" --password-stdin
+
+      # IMAGE_NAME derives from REGISTRY: <REGISTRY>/rbln-metrics-exporter.
+      make build-image \
+        REGISTRY="${IMAGE_REGISTRY}" \
+        VERSION="$$IMAGE_TAG" \
+        PUSH_ON_BUILD=true
+
+  - label: ":pytest: install scenario"
+    key: install
+    depends_on: build-image
+    timeout_in_minutes: 60
+    image: ${SENTINEL_RUNNER_IMAGE}
+    # Shared, cross-repo lock on the single container cluster (operator nightly
+    # etc. use the same group): one job at a time, held from install through
+    # teardown so the next repo gets a clean cluster.
+    concurrency_group: "cloud-ci-container"
+    concurrency: 1
+    priority: 1
+    notify:
+      - github_commit_status:
+          context: "[Metrics Exporter] Install Scenario"
+    secrets:
+      REBEL_SW_DEV_USERNAME: REBEL_SW_DEV_USERNAME
+      REBEL_SW_DEV_PASSWORD: REBEL_SW_DEV_PASSWORD
+      KUBECONFIG_B64: KUBECONFIG_B64
+      GIT_PAT: GIT_PAT
+    artifact_paths:
+      - "${SENTINEL_DIR}/reports/**/*"
+      - "${SENTINEL_DIR}/logs/**/*"
+    retry:
+      automatic:
+        - exit_status: -1
+          limit: 2
+        - signal_reason: agent_stop
+          limit: 2
+    command: |
+      set -euo pipefail
+
+      IMAGE_TAG="$${BUILDKITE_COMMIT:0:8}"
+      REPO_ROOT="$$(pwd)"
+
+      mkdir -p "$$HOME/.kube"
+      echo "$$KUBECONFIG_B64" | base64 -d > "$$HOME/.kube/config"
+      chmod 600 "$$HOME/.kube/config"
+      export KUBECONFIG="$$HOME/.kube/config"
+      export SENTINEL_KUBECONFIG="$$KUBECONFIG"
+
+      # We hold the cluster lock, so a full nuke (incl. cluster-scoped CRs) is
+      # safe. Run it before install too, to clear any hard-killed run's leftover.
+      nuke() {
+        helm list -n "${TEST_NAMESPACE}" -q | xargs -r -n1 helm uninstall -n "${TEST_NAMESPACE}" || true
+        kubectl delete rblnclusterpolicies --all --ignore-not-found || true
+        kubectl delete rblndrivers --all --ignore-not-found || true
+        kubectl delete namespace "${TEST_NAMESPACE}" --ignore-not-found || true
+      }
+      nuke
+
+      git config --global url."https://x-access-token:$$GIT_PAT@github.com/".insteadOf "https://github.com/"
+
+      rm -rf "${OPERATOR_DIR}"
+      git clone --depth=1 --branch "${OPERATOR_REF}" "${OPERATOR_REPO}" "${OPERATOR_DIR}"
+      HELM_CHART="$$REPO_ROOT/${OPERATOR_DIR}/${OPERATOR_CHART_SUBPATH}"
+      helm dependency update "$$HELM_CHART"
+
+      rm -rf "${SENTINEL_DIR}"
+      git clone --depth=1 --branch "${SENTINEL_REF}" "${SENTINEL_REPO}" "${SENTINEL_DIR}"
+      cd "${SENTINEL_DIR}"
+      uv sync --all-extras
+
+      # Override ONLY metrics-exporter -> the PR image; everything else stays
+      # at the baseline operator defaults.
+      export SENTINEL_METRICS_EXPORTER_IMAGE_REGISTRY="${HARBOR_HOST}"
+      export SENTINEL_METRICS_EXPORTER_IMAGE_REPOSITORY="rebellions/rbln-metrics-exporter"
+      export SENTINEL_METRICS_EXPORTER_IMAGE_TAG="$$IMAGE_TAG"
+      export SENTINEL_METRICS_EXPORTER_IMAGE_PULL_POLICY="Always"
+
+      # sentinel creates the drivercred pull secret from these.
+      export SENTINEL_REGISTRY_SERVER="${HARBOR_HOST}"
+      export SENTINEL_REGISTRY_USER="$$REBEL_SW_DEV_USERNAME"
+      export SENTINEL_REGISTRY_PASSWORD="$$REBEL_SW_DEV_PASSWORD"
+
+      # Capture the result so we still tear down (nuke) before releasing the lock.
+      set +e
+      uv run sentinel run install \
+        --helm-chart="$$HELM_CHART" \
+        --namespace="${TEST_NAMESPACE}" \
+        --reports-dir=reports \
+        --logs-dir=logs
+      rc=$$?
+      set -e
+
+      nuke
+      exit $$rc
