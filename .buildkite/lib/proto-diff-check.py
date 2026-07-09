@@ -11,7 +11,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+PRODUCT = "Proto Diff Check"
+COLOR_PASS = "#36a64f"
+COLOR_FAIL = "#FF0000"
 MAX_SLACK_DIFF_CHARS = 30_000
+BLOCK_CHUNK_CHARS = 2_900
 DIFF_ARTIFACT = "proto-sync/rbln_services.diff"
 
 
@@ -42,7 +46,44 @@ def _normalize(text: str) -> list[str]:
     ]
 
 
-def _check(repo: str, ref: str, source_path: str, local_path: str) -> tuple[int, str]:
+def _section(text: str) -> dict:
+    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+
+def _context(text: str) -> dict:
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+
+
+def _title(emoji: str) -> str:
+    build_url = os.environ.get("BUILDKITE_BUILD_URL", "")
+    build_no = os.environ.get("BUILDKITE_BUILD_NUMBER", "")
+    if build_url and build_no:
+        return f"{emoji} *{PRODUCT} <{build_url}|#{build_no}>*"
+    return f"{emoji} *{PRODUCT}*"
+
+
+def _message(text: str, blocks: list[dict], color: str) -> dict:
+    return {
+        "attachments": [{"fallback": text, "color": color, "blocks": blocks}],
+    }
+
+
+def _diff_blocks(diff: str) -> list[dict]:
+    if len(diff) > MAX_SLACK_DIFF_CHARS:
+        diff = (diff[:MAX_SLACK_DIFF_CHARS].rsplit("\n", 1)[0]
+                + "\n... (truncated; full diff in build artifacts)")
+    blocks, chunk = [], ""
+    for line in diff.splitlines(keepends=True):
+        if len(chunk) + len(line) > BLOCK_CHUNK_CHARS:
+            blocks.append(_section(f"```{chunk}```"))
+            chunk = ""
+        chunk += line
+    if chunk:
+        blocks.append(_section(f"```{chunk}```"))
+    return blocks
+
+
+def _check(repo: str, ref: str, source_path: str, local_path: str) -> tuple[int, dict]:
     if ref == "latest-tag":
         ref = _latest_tag(repo)
     quoted_ref = urllib.parse.quote(ref, safe="")
@@ -60,6 +101,7 @@ def _check(repo: str, ref: str, source_path: str, local_path: str) -> tuple[int,
         _github(repo, f"commits/{quoted_ref}", "application/vnd.github+json")
     )["sha"][:8]
     source = f"{repo}@{ref} ({source_sha}) {source_path}"
+    compared = _context(f"`{local_path}` ↔ `{source}`")
 
     local = open(local_path, encoding="utf-8").read()
     diff = "".join(difflib.unified_diff(
@@ -69,25 +111,31 @@ def _check(repo: str, ref: str, source_path: str, local_path: str) -> tuple[int,
 
     if not diff:
         print(f"OK: {local_path} is in sync with {source}", flush=True)
-        return 0, f":white_check_mark: 변경사항 없음 — `{local_path}` ↔ `{source}`"
+        blocks = [
+            _section(_title(":white_check_mark:")),
+            _section("No changes"),
+            {"type": "divider"},
+            compared,
+        ]
+        return 0, _message(f"{PRODUCT}: no changes", blocks, COLOR_PASS)
 
     os.makedirs(os.path.dirname(DIFF_ARTIFACT), exist_ok=True)
     with open(DIFF_ARTIFACT, "w", encoding="utf-8") as f:
         f.write(diff)
     print(diff, end="", flush=True)
 
-    snippet = diff
-    if len(snippet) > MAX_SLACK_DIFF_CHARS:
-        snippet = (snippet[:MAX_SLACK_DIFF_CHARS].rsplit("\n", 1)[0]
-                   + "\n... (truncated; full diff in build artifacts)")
-    build_url = os.environ.get("BUILDKITE_BUILD_URL", "")
-    link = f"<{build_url}|Buildkite build>\n" if build_url else ""
-    return 1, (f":rotating_light: 변경 사항 있음 — `{local_path}` ↔ `{source}`\n"
-               f"{link}```{snippet}```")
+    blocks = [
+        _section(_title(":rotating_light:")),
+        _section("Changes detected"),
+        {"type": "divider"},
+        compared,
+        *_diff_blocks(diff),
+    ]
+    return 1, _message(f"{PRODUCT}: changes detected", blocks, COLOR_FAIL)
 
 
-def _post(channel: str, text: str, token: str) -> None:
-    body = json.dumps({"channel": channel, "text": text}).encode()
+def _post(channel: str, message: dict, token: str) -> None:
+    body = json.dumps({"channel": channel, **message}).encode()
     req = urllib.request.Request("https://slack.com/api/chat.postMessage", data=body, method="POST")
     req.add_header("Authorization", f"Bearer {token}")
     req.add_header("Content-Type", "application/json; charset=utf-8")
@@ -109,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                    default=os.environ.get("LOCAL_PATH", "api/rbln_services.proto"))
     p.add_argument("--channel", default=os.environ.get("SLACK_CHANNEL_ID", ""))
     p.add_argument("--print", dest="print_only", action="store_true",
-                   help="print the Slack message instead of posting")
+                   help="print the Block Kit payload instead of posting")
     a = p.parse_args(argv)
 
     token = os.environ.get("SLACK_OAUTH_TOKEN", "").strip()
@@ -120,14 +168,21 @@ def main(argv: list[str] | None = None) -> int:
             sys.exit("error: no Slack channel (--channel or SLACK_CHANNEL_ID)")
 
     try:
-        rc, text = _check(a.source_repo, a.source_ref, a.source_path, a.local_path)
+        rc, message = _check(a.source_repo, a.source_ref, a.source_path, a.local_path)
     except Exception as exc:
-        build_url = os.environ.get("BUILDKITE_BUILD_URL", "")
-        crash = f":x: proto diff check failed to run: `{exc}`\n{build_url}"
-        print(crash) if a.print_only else _post(a.channel, crash, token)
+        blocks = [
+            _section(_title(":x:")),
+            _section(f"proto diff check failed to run: `{exc}`"),
+        ]
+        crash = _message(f"{PRODUCT}: failed to run", blocks, COLOR_FAIL)
+        print(json.dumps(crash, indent=2)) if a.print_only \
+            else _post(a.channel, crash, token)
         raise
 
-    print(text) if a.print_only else _post(a.channel, text, token)
+    if a.print_only:
+        print(json.dumps(message, indent=2))
+    else:
+        _post(a.channel, message, token)
     return rc
 
 
