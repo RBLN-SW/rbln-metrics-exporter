@@ -5,7 +5,9 @@ import argparse
 import difflib
 import json
 import os
+import re
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -25,6 +27,14 @@ def _github(repo: str, path: str, accept: str) -> bytes:
         return resp.read()
 
 
+def _latest_tag(repo: str) -> str:
+    tags = json.loads(_github(repo, "tags?per_page=100", "application/vnd.github+json"))
+    stable = [t["name"] for t in tags if re.fullmatch(r"v\d+\.\d+\.\d+", t["name"])]
+    if not stable:
+        sys.exit(f"error: no stable vX.Y.Z tags found in {repo}")
+    return max(stable, key=lambda n: tuple(map(int, n[1:].split("."))))
+
+
 def _normalize(text: str) -> list[str]:
     return [
         line for line in text.splitlines(keepends=True)
@@ -33,16 +43,23 @@ def _normalize(text: str) -> list[str]:
 
 
 def _check(repo: str, ref: str, source_path: str, local_path: str) -> tuple[int, str]:
+    if ref == "latest-tag":
+        ref = _latest_tag(repo)
     quoted_ref = urllib.parse.quote(ref, safe="")
-    remote = _github(
-        repo,
-        f"contents/{urllib.parse.quote(source_path)}?ref={quoted_ref}",
-        "application/vnd.github.raw+json",
-    ).decode()
+    try:
+        remote = _github(
+            repo,
+            f"contents/{urllib.parse.quote(source_path)}?ref={quoted_ref}",
+            "application/vnd.github.raw+json",
+        ).decode()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError(f"{source_path} not found in {repo}@{ref}") from None
+        raise
     source_sha = json.loads(
         _github(repo, f"commits/{quoted_ref}", "application/vnd.github+json")
     )["sha"][:8]
-    source = f"{repo}@{source_sha} {source_path}"
+    source = f"{repo}@{ref} ({source_sha}) {source_path}"
 
     local = open(local_path, encoding="utf-8").read()
     diff = "".join(difflib.unified_diff(
