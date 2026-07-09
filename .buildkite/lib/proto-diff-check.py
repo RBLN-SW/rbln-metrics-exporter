@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PRODUCT = "Proto Diff Check"
+PRODUCT = "Metrics Exporter Proto Diff Check"
 COLOR_PASS = "#36a64f"
 COLOR_FAIL = "#FF0000"
 MAX_SLACK_DIFF_CHARS = 30_000
