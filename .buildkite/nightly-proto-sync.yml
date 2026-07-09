@@ -1,0 +1,27 @@
+env:
+  SOURCE_REPO: rebellions-sw/ssw-common-tools
+  SOURCE_REF: "${SOURCE_REF:-dev}"
+  SOURCE_PATH: rbln-smd/proto/public/rbln_smd.proto
+  LOCAL_PATH: api/rbln_services.proto
+  SLACK_CHANNEL_ID: "${SLACK_CHANNEL_ID:-C09NQQGNVTJ}"
+
+agents:
+  queue: "k8s"
+
+steps:
+  - label: ":mag: proto diff check"
+    key: proto-diff
+    timeout_in_minutes: 10
+    image: harbor.k8s.rebellions.in/dockerhub-proxy/python:3.12-slim
+    secrets:
+      GIT_PAT: GIT_PAT
+      SLACK_OAUTH_TOKEN: SLACK_OAUTH_TOKEN
+    artifact_paths:
+      - "proto-sync/*"
+    retry:
+      automatic:
+        - exit_status: -1
+          limit: 2
+        - signal_reason: agent_stop
+          limit: 2
+    command: python3 .buildkite/lib/proto-diff-check.py
