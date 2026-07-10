@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/collector"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/gateway"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/scheduler"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/server"
 	"github.com/spf13/cobra"
@@ -50,6 +52,10 @@ func Start(ctx context.Context, config Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if config.Mode == ModeGateway {
+		return startGateway(ctx, config)
+	}
+
 	dClient, err := daemon.NewClient(ctx, config.RBLNDaemonURL)
 	if err != nil {
 		return err
@@ -80,6 +86,22 @@ func Start(ctx context.Context, config Config) error {
 
 	server := server.NewMetricServer(metricRegistry, config.Port)
 	if err := server.Start(ctx); err != nil {
+		slog.Error("http metrics server stopped", "err", err)
+		return err
+	}
+
+	return nil
+}
+
+func startGateway(ctx context.Context, config Config) error {
+	handler := gateway.NewHandler()
+	defer handler.Close()
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", handler)
+
+	srv := server.NewServer(mux, config.Port)
+	if err := srv.Start(ctx); err != nil {
 		slog.Error("http metrics server stopped", "err", err)
 		return err
 	}

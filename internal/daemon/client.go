@@ -58,6 +58,21 @@ func NewClient(ctx context.Context, endpoint string) (*Client, error) {
 	}, nil
 }
 
+func NewLazyClient(endpoint string) (*Client, error) {
+	conn, err := grpc.NewClient(
+		endpoint,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create rbln-daemon client for %s: %w", endpoint, err)
+	}
+
+	return &Client{
+		conn:   conn,
+		client: rblnservicespb.NewRBLNServicesClient(conn),
+	}, nil
+}
+
 func (c *Client) Close() error {
 	return c.conn.Close()
 }

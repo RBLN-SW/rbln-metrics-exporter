@@ -16,6 +16,7 @@ const (
 )
 
 type Config struct {
+	Mode           string
 	RBLNDaemonURL  string
 	Port           int
 	Interval       time.Duration
@@ -31,6 +32,7 @@ type configBuilder struct {
 
 func newConfigBuilder(getenv func(string) string) *configBuilder {
 	cfg := Config{
+		Mode:           getenvDefault(getenv, "RBLN_METRICS_EXPORTER_MODE", ModeLocal),
 		RBLNDaemonURL:  getenvDefault(getenv, "RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL", "127.0.0.1:50051"),
 		Port:           getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_PORT", 9090),
 		Interval:       time.Duration(getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_INTERVAL", 5)) * time.Second,
@@ -46,7 +48,8 @@ func newConfigBuilder(getenv func(string) string) *configBuilder {
 }
 
 func (b *configBuilder) bindFlags(fs *pflag.FlagSet) {
-	fs.StringVar(&b.cfg.RBLNDaemonURL, "rbln-daemon-url", b.cfg.RBLNDaemonURL, "Endpoint to RBLN daemon grpc server")
+	fs.StringVar(&b.cfg.Mode, "mode", b.cfg.Mode, "Exporter mode: local (collect from the local daemon on a schedule), gateway (collect from the rbln-smd given by /metrics?target=<host:port> on each scrape)")
+	fs.StringVar(&b.cfg.RBLNDaemonURL, "rbln-daemon-url", b.cfg.RBLNDaemonURL, "Endpoint to RBLN daemon grpc server (local mode only)")
 	fs.IntVar(&b.cfg.Port, "port", b.cfg.Port, "Port to listen for requests")
 	fs.IntVar(&b.intervalSec, "interval", b.intervalSec, fmt.Sprintf("Interval of collecting metrics (%d-%d seconds)", MinIntervalSeconds, MaxIntervalSeconds))
 	fs.BoolVar(&b.cfg.Oneshot, "oneshot", b.cfg.Oneshot, "Collect once and exit")
@@ -59,6 +62,12 @@ func (b *configBuilder) finalize() error {
 		return fmt.Errorf("interval must be %d-%d seconds", MinIntervalSeconds, MaxIntervalSeconds)
 	}
 	b.cfg.Interval = time.Duration(b.intervalSec) * time.Second
+	b.cfg.Mode = strings.ToLower(b.cfg.Mode)
+	switch b.cfg.Mode {
+	case ModeLocal, ModeGateway:
+	default:
+		return fmt.Errorf("mode must be one of %q, %q", ModeLocal, ModeGateway)
+	}
 	b.cfg.KubernetesMode = strings.ToLower(b.cfg.KubernetesMode)
 	switch b.cfg.KubernetesMode {
 	case KubernetesModeAuto, KubernetesModeOn, KubernetesModeOff:
@@ -124,4 +133,9 @@ const (
 	KubernetesModeAuto = "auto"
 	KubernetesModeOn   = "on"
 	KubernetesModeOff  = "off"
+)
+
+const (
+	ModeLocal   = "local"
+	ModeGateway = "gateway"
 )

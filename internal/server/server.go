@@ -18,18 +18,19 @@ type MetricServer struct {
 func NewMetricServer(gatherer prometheus.Gatherer, port int) *MetricServer {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}))
+	return NewServer(mux, port)
+}
 
+func NewServer(handler http.Handler, port int) *MetricServer {
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	metricServer := &MetricServer{
+	return &MetricServer{
 		server: server,
 	}
-
-	return metricServer
 }
 
 func (ms *MetricServer) Start(ctx context.Context) error {
