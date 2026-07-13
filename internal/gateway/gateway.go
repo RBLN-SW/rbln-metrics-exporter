@@ -44,6 +44,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registry := prometheus.NewRegistry()
+	up := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "rbln_up",
+		Help: "1 if the target rbln-smd answered the scrape, 0 otherwise",
+	})
+	registry.MustRegister(up)
 
 	collectorFactory := collector.NewCollectorFactory(
 		collector.NewNoopPodResourceMapper(),
@@ -56,9 +61,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), scrapeTimeout(r))
 	defer cancel()
 
+	up.Set(1)
 	for _, c := range collectorFactory.NewCollectors() {
 		if err := c.GetMetrics(ctx); err != nil {
 			slog.Warn("gateway collect failed", "target", target, "err", err)
+			up.Set(0)
 			break
 		}
 	}
