@@ -17,7 +17,13 @@ import (
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 )
 
-const defaultScrapeTimeout = 10 * time.Second
+const (
+	defaultScrapeTimeout = 10 * time.Second
+	// Subtracted from the Prometheus-provided timeout so the gateway answers
+	// before Prometheus aborts the scrape (cf. blackbox_exporter --timeout-offset).
+	timeoutOffset    = 500 * time.Millisecond
+	minScrapeTimeout = time.Second
+)
 
 type Handler struct {
 	mu      sync.Mutex
@@ -34,6 +40,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := stripSchemePrefix(r.URL.Query().Get("target"))
 	if target == "" {
 		http.Error(w, "missing required parameter: target=<host:port> of an rbln-smd grpc endpoint", http.StatusBadRequest)
+		return
+	}
+	if _, _, err := net.SplitHostPort(target); err != nil {
+		http.Error(w, fmt.Sprintf("invalid target %q: expected <host:port>: %v", target, err), http.StatusBadRequest)
 		return
 	}
 
@@ -109,7 +119,10 @@ func hostLabel(target string) string {
 func scrapeTimeout(r *http.Request) time.Duration {
 	if v := r.Header.Get("X-Prometheus-Scrape-Timeout-Seconds"); v != "" {
 		if seconds, err := strconv.ParseFloat(v, 64); err == nil && seconds > 0 {
-			return time.Duration(seconds * float64(time.Second))
+			// Undercut Prometheus's own deadline so a hung target still yields
+			// a served response with rbln_up 0 (up==1), not a failed scrape (up==0).
+			timeout := time.Duration(seconds*float64(time.Second)) - timeoutOffset
+			return max(timeout, minScrapeTimeout)
 		}
 	}
 	return defaultScrapeTimeout
