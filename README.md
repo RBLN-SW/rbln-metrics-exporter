@@ -7,6 +7,7 @@ The RBLN Metrics Exporter exposes detailed telemetry for RBLN NPUs in [Prometheu
 ## Key Features
 
 - **Native Prometheus endpoint** on `/metrics` served by a lightweight Go HTTP server.
+- **Two collection modes**: `local` (default) collects from the node-local RBLN daemon on a schedule; `gateway` follows the Prometheus [multi-target exporter pattern](https://prometheus.io/docs/guides/multi-target-exporter/) so a single central instance can collect from many remote hosts — see [Gateway Mode](#gateway-mode-multi-target).
 - **NPU-aware scheduling** via DaemonSet affinities that target nodes labeled by NPU Feature Discovery add-on.
 - **Kubernetes context labels** (namespace, pod, container) populated by integrating with `kubelet` pod-resources API.
 - **Binary or container deployment** with configurable scrape interval, port, and daemon gRPC endpoint.
@@ -55,19 +56,23 @@ Usage:
 Flags:
   -h, --help                     help for rbln-metrics-exporter
       --interval int             Interval of collecting metrics (1-60 seconds) (default 5)
+      --kubernetes-mode string   Kubernetes mode: auto, on, off (default "auto")
+      --mode string              Exporter mode: local (collect from the local daemon on a schedule), gateway (collect from the rbln-smd given by /metrics?target=<host:port> on each scrape) (default "local")
+      --node-name string         Name of the node (defaults to NODE_NAME env or hostname)
       --oneshot                  Collect once and exit
       --port int                 Port to listen for requests (default 9090)
-      --rbln-daemon-url string   Endpoint to RBLN daemon grpc server (default "127.0.0.1:50051")
-      --node-name string         Override detected node name (defaults to hostname or NODE_NAME env)
+      --rbln-daemon-url string   Endpoint to RBLN daemon grpc server (local mode only) (default "127.0.0.1:50051")
 ```
 
 ### Environment Variables
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL` | `127.0.0.1:50051` | gRPC endpoint of the RBLN daemon |
+| `RBLN_METRICS_EXPORTER_MODE` | `local` | Exporter mode: `local` or `gateway` |
+| `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL` | `127.0.0.1:50051` | gRPC endpoint of the RBLN daemon (local mode only) |
 | `RBLN_METRICS_EXPORTER_PORT` | `9090` | Port for the `/metrics` HTTP server |
 | `RBLN_METRICS_EXPORTER_INTERVAL` | `5` | Collection interval in seconds (1–60) |
+| `RBLN_METRICS_EXPORTER_KUBERNETES_MODE` | `auto` | Kubernetes integration: `auto`, `on`, or `off` |
 | `RBLN_METRICS_EXPORTER_ONESHOT` | `false` | When `true`, scrape once and exit |
 | `NODE_NAME` | auto-detected | Overrides the node label inserted into metrics |
 
@@ -145,6 +150,79 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 
 ---
 
+## Gateway Mode (Multi-Target)
+
+Gateway mode turns a single exporter instance into a stateless collection gateway for many hosts, following the Prometheus [multi-target exporter pattern](https://prometheus.io/docs/guides/multi-target-exporter/) (the same design as `blackbox_exporter` and `snmp_exporter`). It is intended for bare-metal / non-Kubernetes fleets where running one exporter per host is impractical.
+
+|  | `local` (default) | `gateway` |
+| --- | --- | --- |
+| Deployment | One per node (DaemonSet) | One central instance |
+| Collection | Node-local daemon, on a schedule | Remote `rbln-smd` given per scrape, on demand |
+| Target selection | None (own node) | `?target=<host:port>` query parameter |
+| Kubernetes pod labels | Yes | No (hardware metrics only) |
+
+### How It Works
+
+Each Prometheus scrape of `/metrics?target=<host:port>` makes the gateway connect to that host's `rbln-smd` over gRPC, collect the full metric set on the spot, and answer in Prometheus format. The exporter keeps no metric state between requests and holds no target list — targets live entirely in the Prometheus scrape configuration. gRPC connections are cached per target and reconnect automatically.
+
+Every response includes `rbln_up`: `1` when the target daemon answered, `0` when it was unreachable (the HTTP scrape itself still succeeds, so a dead NPU host is reported rather than hidden).
+
+### Running the Gateway
+
+```bash
+$ rbln-metrics-exporter --mode=gateway --port=9200
+```
+
+Verify with a manual scrape (the target is the `rbln-smd` gRPC address as reachable *from the gateway*):
+
+```bash
+$ curl "http://localhost:9200/metrics?target=npu-host-1:50051"
+```
+
+### Prometheus Configuration
+
+Operators list the NPU hosts as targets; relabeling turns each one into a `?target=` parameter and redirects the actual request to the gateway:
+
+```yaml
+scrape_configs:
+  - job_name: rbln-npu-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - npu-host-1:50051   # rbln-smd gRPC address on each NPU host
+          - npu-host-2:50051
+    relabel_configs:
+      # 1. Copy the listed address into the ?target= query parameter.
+      - source_labels: [__address__]
+        target_label: __param_target
+      # 2. Keep it as the instance label so series stay distinguishable per host.
+      - source_labels: [__param_target]
+        target_label: instance
+      # 3. Send the actual HTTP request to the gateway instead of the NPU host.
+      - target_label: __address__
+        replacement: rbln-gateway:9200   # gateway exporter address
+```
+
+With this in place Prometheus scrapes `http://rbln-gateway:9200/metrics?target=npu-host-1:50051` for each host and stores every series with `instance="npu-host-1:50051"`. Rule order matters: the copy rules must run before `__address__` is overwritten.
+
+### Alerting
+
+Two failure signals exist and mean different things:
+
+| Expression | Meaning |
+| --- | --- |
+| `up == 0` | The gateway itself (or the network path to it) is down — affects all targets |
+| `up == 1 and rbln_up == 0` | That specific NPU host's `rbln-smd` is unreachable |
+
+### Notes and Limitations
+
+- Collection happens inside the scrape request, so slow targets consume scrape time. The gateway honors the `X-Prometheus-Scrape-Timeout-Seconds` header Prometheus sends (10s cap by default) — raise `scrape_timeout` for slow links.
+- Pod/namespace/container labels are not available: the kubelet pod-resources API is node-local and cannot describe remote hosts. Use `local` mode (DaemonSet) on Kubernetes clusters.
+- The `hostname` label is filled with the host part of the target address.
+- The gRPC connection to targets is plaintext; ensure the daemon port is reachable from the gateway and restricted to trusted networks.
+
+---
+
 ## Metrics Reference
 
 | Name | Description | Unit |
@@ -161,6 +239,7 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 | `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
 | `rbln_npu_pcie_link_width` | Current PCIe link width | lanes |
 | `rbln_npu_device_info` | Device identity and static attributes as labels | always 1 |
+| `rbln_up` | Gateway mode only: 1 if the target `rbln-smd` answered the scrape, 0 otherwise | 0/1 |
 
 ### Common Label Set
 
@@ -203,6 +282,9 @@ rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_versi
 | `/metrics` is empty | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
 | No Kubernetes labels | Pod-resources socket missing | Confirm `/var/lib/kubelet/pod-resources/kubelet.sock` is mounted and kubelet exposes the API |
 | Scrape errors in Prometheus | Authorization/namespace mismatch | Ensure Service or ServiceMonitor selects the exporter pods and Prometheus is allowed to scrape the namespace |
+| Gateway returns HTTP 400 | Missing `?target=` parameter | Check the `relabel_configs` copy rules run before `__address__` is replaced |
+| `rbln_up 0` for one target | That host's `rbln-smd` unreachable from the gateway | Verify the daemon is running on the target and its gRPC port is reachable from the gateway host |
+| Prometheus scrapes the NPU host directly | `__address__` replacement rule missing | Add the final relabel rule pointing `__address__` at the gateway |
 
 ---
 
