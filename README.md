@@ -155,6 +155,12 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 | `rbln_npu_memory_total` | Total DRAM | bytes |
 | `rbln_npu_utilization` | SM utilization | % |
 | `rbln_npu_health` | Binary health (0 = active, 1 = inactive) | 0/1 |
+| `rbln_npu_device_status` | Device state machine status; one series per `state`, 1 marks the current state | 0/1 |
+| `rbln_npu_power_state` | DVFS performance state (0 = highest performance); absent when the daemon has no reading | ordinal |
+| `rbln_npu_clock_frequency_mhz` | Clock frequency of the block named by the `clock` label; clocks a platform does not implement are absent | MHz |
+| `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
+| `rbln_npu_pcie_link_width` | Current PCIe link width | lanes |
+| `rbln_npu_device_info` | Device identity and static attributes as labels | always 1 |
 
 ### Common Label Set
 
@@ -162,7 +168,7 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 | --- | --- |
 | `name` | Character device node (`rbln0`, `rbln1`, …) |
 | `uuid` | Unique NPU UUID |
-| `card` | Marketing card name (e.g., `RBLN-CA25`) resolved from PCIe device ID |
+| `card` | Marketing card name (e.g., `RBLN-CA25`) |
 | `deviceID` | PCIe device ID |
 | `hostname` | Host node name |
 | `driver_version` | Kernel driver build |

@@ -21,6 +21,11 @@ func NewNPUCollector(dClient *daemon.Client, registry prometheus.Registerer, isK
 		NewDeviceHealthMetric(podResourceMapper, nodeName, isKubernetes),
 		NewMemoryMetric(podResourceMapper, nodeName, isKubernetes),
 		NewUtilizationMetric(podResourceMapper, nodeName, isKubernetes),
+		NewDeviceStateMetric(podResourceMapper, nodeName, isKubernetes),
+		NewPowerStateMetric(podResourceMapper, nodeName, isKubernetes),
+		NewClockMetric(podResourceMapper, nodeName, isKubernetes),
+		NewPCIeLinkMetric(podResourceMapper, nodeName, isKubernetes),
+		NewDeviceInfoMetric(podResourceMapper, nodeName, isKubernetes),
 	}
 
 	return &NPUCollector{
@@ -41,6 +46,11 @@ func (n *NPUCollector) Register(registerer prometheus.Registerer) {
 func (n *NPUCollector) GetMetrics(ctx context.Context) error {
 	devices, err := n.dClient.GetDeviceInfo(ctx)
 	if err != nil {
+		// Clear the last successful values so a broken collection cycle
+		// surfaces as absent metrics instead of stale-but-healthy ones.
+		for _, metric := range n.metrics {
+			metric.Reset()
+		}
 		return err
 	}
 

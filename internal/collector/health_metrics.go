@@ -42,6 +42,6 @@ func (d *DeviceHealthMetric) UpdateMetrics(ctx context.Context, devices []daemon
 
 	for _, device := range devices {
 		labels := buildLabels(device, d.NodeName, podResourceInfo, d.includePodLabels)
-		d.healthStatus.With(labels).Set(float64(device.DeviceStatus))
+		d.healthStatus.With(labels).Set(float64(device.ErrStatus))
 	}
 }

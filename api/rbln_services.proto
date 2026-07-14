@@ -1,3 +1,30 @@
+/*
+ * [Rebellions Inc.]("Rebellions") CONFIDENTIAL
+ * Unpublished Copyright (c) 2021-2026 [Rebellions Inc.], All Rights Reserved.
+ *
+ * NOTICE: All information contained herein is, and remains the property of Rebellions.
+ * The intellectual and technical concepts contained herein are proprietary to Rebellions
+ * and may be covered by Republic of Korea, U.S., and other countries' Patents, patents
+ * in process, and are protected by trade secret or copyright law.
+ *
+ * Dissemination of this information or reproduction of this material is strictly forbidden
+ * unless prior written permission is obtained from Rebellions. Access to the source code
+ * contained herein is hereby forbidden to anyone except current Rebellions employees, managers
+ * or contractors who have executed Confidentiality and Non-disclosure agreements explicitly
+ * covering such access.
+ *
+ * The copyright notice above does not evidence any actual or intended publication or disclosure
+ * of this source code, which includes information that is confidential and/or proprietary, and
+ * is a trade secret, of Rebellions.
+ *
+ * ANY REPRODUCTION, MODIFICATION, DISTRIBUTION, PUBLIC PERFORMANCE, OR PUBLIC DISPLAY OF OR
+ * THROUGH USE OF THIS SOURCE CODE WITHOUT THE EXPRESS WRITTEN CONSENT OF REBELLIONS IS STRICTLY
+ * PROHIBITED, AND IN VIOLATION OF APPLICABLE LAWS AND INTERNATIONAL TREATIES. THE RECEIPT OR
+ * POSSESSION OF THIS SOURCE CODE AND/OR RELATED INFORMATION DOES NOT CONVEY OR IMPLY ANY RIGHTS
+ * TO REPRODUCE, DISCLOSE OR DISTRIBUTE ITS CONTENTS, OR TO MANUFACTURE, USE, OR SELL ANYTHING
+ * THAT IT MAY DESCRIBE, IN WHOLE OR IN PART.
+ */
+
 syntax = "proto3";
 
 package rblnservices;
@@ -8,8 +35,8 @@ option go_package = "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnserv
 service RBLNServices {
 	// search device list with device name (e.g. 'rbln0')
 	rpc getDeviceList(Empty) returns (stream Device) {}
-    // search device list with device name (e.g. 'rbln0')
-    rpc getServiceableDeviceList(Empty) returns (stream Device) {}
+	// like getDeviceList but lists serviceable devices only (excludes SR-IOV VFs)
+	rpc getServiceableDeviceList(Empty) returns (stream Device) {}
 	// reset device from device name specified.
 	rpc resetDevice(Device) returns (StatusMsg) {}
 	// reset all device in system. it is equivalent with rsd reset.
@@ -29,6 +56,22 @@ service RBLNServices {
 	rpc getTotalInfo(Empty) returns (stream DeviceInfo) {}
 	// get utilization of NPU device
 	rpc getUtilization(Device) returns (UtilInfo) {}
+
+	// --- New RPCs (Rbln{Verb}{Resource} naming) ---
+	// get topology info (NUMA, CPU affinity, RSD group, PCIe link) for devices
+	rpc RblnListTopology(DeviceFilter) returns (RblnListTopologyResponse) {}
+	// list coredump entries for devices
+	rpc RblnListCoredumps(DeviceFilter) returns (RblnListCoredumpsResponse) {}
+	// get a daemon runtime config value
+	rpc RblnGetConfig(RblnGetConfigRequest) returns (RblnGetConfigResponse) {}
+	// set a daemon runtime config value
+	rpc RblnSetConfig(RblnSetConfigRequest) returns (RblnSetConfigResponse) {}
+	// list all active RSD groups and their member devices
+	rpc RblnListGroups(Empty) returns (RblnListGroupsResponse) {}
+	// create an RSD group with the specified devices
+	rpc RblnCreateGroup(RblnCreateGroupRequest) returns (RblnGroupOpResponse) {}
+	// destroy an RSD group by group_id (-1 = all)
+	rpc RblnDestroyGroup(RblnDestroyGroupRequest) returns (RblnGroupOpResponse) {}
 }
 
 enum Status {
@@ -38,22 +81,82 @@ enum Status {
 	FAILED = 1;
 }
 
-enum EventType {
-	// event does snot require response(daemon to kernel response)
-	NO_RESPONSE = 0;
-	// event requires response(daemon to kernel response)
-	RESPONSE_REQUIRED = 1;
+/*
+ * <pre><code>
+ * +====================================================================================+
+ * | Device State Machine Diagram                                                       |
+ * +====================================================================================+
+ * | [State Descriptions]                                                               |
+ * | 1. INIT   : Device initialization in progress.                                     |
+ * | 2. READY  : Device is ready for use (Init/Reset complete) or currently in use.     |
+ * | 3. BUSY   : Device reset request is being processed.                               |
+ * | 4. FAULT  : Reset request failed or unexpected device error occurred.              |
+ * | 5. FINISH : Device removal request is being processed.                             |
+ * +------------------------------------------------------------------------------------+
+ * | [State Diagram]                                                                    |
+ * |                                  ┌────────────┐                                    |
+ * |                                  │            │                                    |
+ * |                                  │    INIT    │                                    |
+ * |                                  │            │                                    |
+ * |                                  └─────┬──────┘                                    |
+ * |                                        │ (Init Complete)                           |
+ * |                                        ▼                                           |
+ * |           ┌────────────┐ (Dev    ┌────────────┐ (Remove  ┌────────────┐            |
+ * |           │            │ Fault)  │            │   Req)   │            │            |
+ * |           │   FAULT    │◀────────│   READY    │─────────▶│   FINISH   │            |
+ * |           │            │         │            │          │            │            |
+ * |           └───┬────────┘         └─────┬──────┘          └────────────┘            |
+ * |               │    ▲                   │  ▲                                        |
+ * |               │    │       (Reset Req) │  │ (Reset Succeed)                        |
+ * |               │    │                   │  │                                        |
+ * |               │    │(Reset Fail)       ▼  │                                        |
+ * |               │    │             ┌────────────┐                                    |
+ * |               │    └─────────────│            │                                    |
+ * |               │                  │    BUSY    │                                    |
+ * |               └─────────────────▶│            │                                    |
+ * |               (Reset Req)        └────────────┘                                    |
+ * +====================================================================================+
+ * </code></pre>
+ */
+enum DeviceStatus {
+	// device is ready
+	READY = 0;
+	// device is busy
+	BUSY = 1;
+	// device is initialized, but not ready
+	INIT = 2;
+	// device is in fault state
+	FAULT = 3;
+	// device is finishing to remove
+	FINISH = 4;
+	// reserved for future use
+	reserved 5 to 99;
+
+	// device not found
+	NOT_FOUND = 100;
+	// reserved for future use
+	reserved 101 to 127;
 }
 
+// Deprecated since v3.x — will be removed in v4.0.0.
+// EventInfo.event_type is now int32; match values against ENUM_RBLN_DMON_DATA_OUT_TYPE in
+// rebellions/common/daemon.h instead of this enum.
+// Migration: replace any EventType.Name(event.event_type) calls with a label lookup or direct integer comparison.
+enum EventType {
+	NO_RESPONSE       = 0 [deprecated = true];
+	RESPONSE_REQUIRED = 1 [deprecated = true];
+}
+
+// Deprecated since v3.x — will be removed in v4.0.0.
+// EventInfo.value is now int32; match values against ENUM_RBLN_DMON_EVENT_TYPE in
+// rebellions/common/daemon.h instead of this enum.
+// Migration: replace any EventSource.Name(event.value) calls with a label lookup or direct integer comparison.
 enum EventSource {
-	// event occured from single device hard reset
-	SIGNLE_HARD_RESET = 0;
-	// event occured from rsd device hard reset
-	RSD_HARD_RESET = 1;
-	// event occured from TDR
-	TDR_EVENT = 2;
-	// event occured from CP event
-	CP_EVENT = 3;
+	SINGLE_HARD_RESET = 0 [deprecated = true];
+	RSD_HARD_RESET    = 1 [deprecated = true];
+	TDR_EVENT         = 2 [deprecated = true];
+	CP_EVENT          = 3 [deprecated = true];
+	COREDUMP          = 4 [deprecated = true];
 }
 
 
@@ -69,21 +172,41 @@ message Device {
 	string dev_id = 2;
 	// device uuid (00000000-0000-0000-0000-000000000000 format)
 	string uuid = 3;
+	// device pci bus id (e.g. 0000:47:00.0)
+	string pci_bus_id = 4;
+	// card product name (e.g. 'RBLN-CA25')
+	string card_name = 5;
+	// true when this device is an SR-IOV virtual function. Derived from the
+	// authoritative PCI relationship (sysfs physfn link), not the device name.
+	bool is_vf = 6;
+	// for a VF, the device name of its parent physical function (e.g. 'rbln0');
+	// empty for a PF. Lets clients render the PF/VF relationship without
+	// guessing it from the device name.
+	string parent_name = 7;
+	// number of SR-IOV VFs currently enabled on this PF. 0 for a VF or a PF
+	// with SR-IOV disabled. A PF with num_vfs > 0 has been pulled from the
+	// compute topology and is not directly usable; clients use this to avoid
+	// presenting such a PF as a ready compute device.
+	uint32 num_vfs = 8;
 }
 
 message ClockInfo {
 	// CP clock information (Mhz)
-	int32 cp_clock = 1;
+	int32 cp_0_clock = 1;
 	// DNC1 clock information (Mhz)
-	int32 dc1_clock = 2;
+	int32 dc_0_clock = 2;
 	// DNC2 clock information (Mhz)
-	int32 dc2_clock = 3;
+	int32 dc_1_clock = 3;
 	// Bus clock information (Mhz)
 	int32 bus_clock = 4;
 	// SHM clock information (Mhz)
 	int32 shm_clock = 5;
 	// error status
 	Status err_status = 6;
+
+	// REBEL clock information
+	int32 cp_1_clock = 7;
+	int32 dram_clock = 8;
 }
 
 message VersionInfo {
@@ -98,9 +221,9 @@ message VersionInfo {
 }
 
 message HWInfo {
-	// temperature in celsius unit.
+	// temperature in milli-degree Celsius unit.
 	float temperature = 1;
-	// hardware watt.
+	// hardware power in micro-watt unit.
 	float watt = 2;
 	// error status
 	Status err_status = 3;
@@ -126,9 +249,9 @@ message EventInfo {
 	// device name
 	string dev_name = 1;
 	// event type
-	EventType event_type = 2;
-	// event value
-	EventSource value = 3;
+	int32 event_type = 2;
+	// event source value
+	int32 value = 3;
 	// sub event value
 	int32 sub_value = 4;
 	// event trigger time (uptime)
@@ -146,9 +269,9 @@ message DeviceInfo {
 	float total_mem = 3;
 	// device memory in use (GB unit)
 	float used_mem = 4;
-	// temperature in celsius unit.
+	// temperature in milli-degree Celsius unit.
 	float temperature = 5;
-	// hardware watt currently consumed
+	// hardware power currently consumed in micro-watt
 	float watt = 6;
 	// firmware version
 	string fw_version = 7;
@@ -158,8 +281,114 @@ message DeviceInfo {
 	float utilization = 9;
 	// error status
 	Status err_status = 10;
+	// device status
+	DeviceStatus dev_status = 11;
+	// device p-state
+	int32 p_state = 12;
 }
 
 message Empty {
 	// Just wrapper message to indicates dummy!
+}
+
+// --- Standard building blocks (new RPCs) ---
+
+// Per-item error detail. Empty (default) = success.
+message ErrorDetail {
+	int32 code = 1;
+	string message = 2;
+}
+
+// Server-side device filter. Empty = all devices.
+// device_ids and group_ids are mutually exclusive;
+// server ignores group_ids if device_ids is present.
+message DeviceFilter {
+	repeated int32 device_ids = 1;
+	repeated int32 group_ids = 2;
+}
+
+// --- Topology ---
+
+message TopologyEntry {
+	string device_name = 1;
+	string pci_bus_id = 2;
+	int32 numa_node = 3;
+	string local_cpulist = 4;
+	string rsd_group = 5;
+	string pcie_link_speed = 6;
+	string pcie_link_width = 7;
+	ErrorDetail error = 15;
+}
+
+message RblnListTopologyResponse {
+	repeated TopologyEntry entries = 1;
+}
+
+// --- Coredump / Journal ---
+
+message CoredumpEntry {
+	string device_name = 1;
+	string timestamp = 2;
+	string path = 3;
+	// Fields below are read from the per-coredump `meta` INI file written
+	// alongside fw.log/boot.log. They are best-effort: an older daemon, an
+	// older coredump dir without a meta file, or a missing/corrupt meta
+	// file leaves them at their proto3 default (empty string / 0).
+	string situation = 4;     // CDP situation name, e.g. "RESET" or "MANUAL"
+	uint32 version = 5;       // coredump header version (1 or 2)
+	string timestamp_utc = 6; // ISO-8601 UTC, e.g. "2026-04-29T04:30:53.554Z"
+	uint32 asic_type = 7;     // ASIC type id from coredump header (KMD-emitted); 0 if unavailable
+	ErrorDetail error = 15;
+}
+
+message RblnListCoredumpsResponse {
+	repeated CoredumpEntry entries = 1;
+}
+
+// --- Config ---
+
+message RblnGetConfigRequest {
+	string key = 1;
+}
+
+message RblnGetConfigResponse {
+	string key = 1;
+	string value = 2;
+	ErrorDetail error = 15;
+}
+
+message RblnSetConfigRequest {
+	string key = 1;
+	string value = 2;
+}
+
+message RblnSetConfigResponse {
+	ErrorDetail error = 15;
+}
+
+// --- Group Management ---
+
+message GroupEntry {
+	int32 group_id = 1;
+	string group_name = 2;
+	repeated string device_names = 3;
+	ErrorDetail error = 15;
+}
+
+message RblnListGroupsResponse {
+	repeated GroupEntry entries = 1;
+}
+
+message RblnCreateGroupRequest {
+	int32 group_id = 1;
+	repeated int32 device_ids = 2;
+}
+
+// group_id = -1 is a sentinel for "destroy all groups"
+message RblnDestroyGroupRequest {
+	int32 group_id = 1;
+}
+
+message RblnGroupOpResponse {
+	ErrorDetail error = 15;
 }
