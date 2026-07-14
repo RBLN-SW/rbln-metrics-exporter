@@ -190,6 +190,13 @@ func (c *Client) getTopologyByName(ctx context.Context) (map[string]*TopologyInf
 
 	topologies := make(map[string]*TopologyInfo, len(resp.GetEntries()))
 	for _, entry := range resp.GetEntries() {
+		// A failed entry's zero values are indistinguishable from real
+		// readings (e.g. numa_node 0), so skip it entirely.
+		if entryErr := entry.GetError(); entryErr.GetCode() != 0 || entryErr.GetMessage() != "" {
+			slog.Debug("skipping topology entry with error",
+				"device", entry.GetDeviceName(), "code", entryErr.GetCode(), "message", entryErr.GetMessage())
+			continue
+		}
 		topologies[entry.GetDeviceName()] = &TopologyInfo{
 			NUMANode:      entry.GetNumaNode(),
 			CPUList:       entry.GetLocalCpulist(),

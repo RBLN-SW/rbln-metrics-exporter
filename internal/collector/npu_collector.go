@@ -46,6 +46,11 @@ func (n *NPUCollector) Register(registerer prometheus.Registerer) {
 func (n *NPUCollector) GetMetrics(ctx context.Context) error {
 	devices, err := n.dClient.GetDeviceInfo(ctx)
 	if err != nil {
+		// Clear the last successful values so a broken collection cycle
+		// surfaces as absent metrics instead of stale-but-healthy ones.
+		for _, metric := range n.metrics {
+			metric.Reset()
+		}
 		return err
 	}
 
