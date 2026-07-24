@@ -239,7 +239,7 @@ Two failure signals exist and mean different things:
 | `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
 | `rbln_npu_pcie_link_width` | Current PCIe link width | lanes |
 | `rbln_npu_device_info` | Device identity and static attributes as labels | always 1 |
-| `rbln_up` | Gateway mode only: 1 if the target `rbln-smd` answered the scrape, 0 otherwise | 0/1 |
+| `rbln_up` | 1 if the last metrics collection from `rbln-smd` succeeded, 0 otherwise (local mode: the last scheduled collection cycle; gateway mode: the collection performed for this scrape) | 0/1 |
 
 ### Common Label Set
 
@@ -279,7 +279,7 @@ rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_versi
 
 | Symptom | Possible Cause | Action |
 | --- | --- | --- |
-| `/metrics` is empty | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
+| `rbln_up` is `0` and NPU metrics are absent | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
 | No Kubernetes labels | Pod-resources socket missing | Confirm `/var/lib/kubelet/pod-resources/kubelet.sock` is mounted and kubelet exposes the API |
 | Scrape errors in Prometheus | Authorization/namespace mismatch | Ensure Service or ServiceMonitor selects the exporter pods and Prometheus is allowed to scrape the namespace |
 | Gateway returns HTTP 400 | Missing `?target=` parameter | Check the `relabel_configs` copy rules run before `__address__` is replaced |

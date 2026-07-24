@@ -54,10 +54,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registry := prometheus.NewRegistry()
-	up := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "rbln_up",
-		Help: "1 if the target rbln-smd answered the scrape, 0 otherwise",
-	})
+	up := collector.NewUpGauge()
 	registry.MustRegister(up)
 
 	collectorFactory := collector.NewCollectorFactory(

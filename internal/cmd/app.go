@@ -81,7 +81,10 @@ func Start(ctx context.Context, config Config) error {
 	)
 	collectors := collectorFactory.NewCollectors()
 
-	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval)
+	up := collector.NewUpGauge()
+	metricRegistry.MustRegister(up)
+
+	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval, up)
 	go sched.Run(ctx)
 
 	server := server.NewMetricServer(metricRegistry, config.Port)

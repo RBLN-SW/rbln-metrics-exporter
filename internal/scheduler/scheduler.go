@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/collector"
 )
 
@@ -12,13 +13,15 @@ type Scheduler struct {
 	collectors        []collector.Collector
 	interval          time.Duration
 	podResourceMapper *collector.PodResourceMapper
+	up                prometheus.Gauge
 }
 
-func NewScheduler(podResourceMapper *collector.PodResourceMapper, collectors []collector.Collector, interval time.Duration) *Scheduler {
+func NewScheduler(podResourceMapper *collector.PodResourceMapper, collectors []collector.Collector, interval time.Duration, up prometheus.Gauge) *Scheduler {
 	return &Scheduler{
 		collectors:        collectors,
 		interval:          interval,
 		podResourceMapper: podResourceMapper,
+		up:                up,
 	}
 }
 
@@ -26,9 +29,11 @@ func (s *Scheduler) RunOnce(ctx context.Context) error {
 	s.podResourceMapper.TriggerSync()
 	for _, collector := range s.collectors {
 		if err := collector.GetMetrics(ctx); err != nil {
+			s.up.Set(0)
 			return err
 		}
 	}
+	s.up.Set(1)
 	return nil
 }
 
