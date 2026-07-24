@@ -25,3 +25,10 @@ func metricName(legacy, current string) string {
 	}
 	return legacy
 }
+
+func NewUpGauge() prometheus.Gauge {
+	return prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "rbln_up",
+		Help: "1 if the last metrics collection from rbln-smd succeeded, 0 otherwise",
+	})
+}
