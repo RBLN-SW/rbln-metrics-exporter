@@ -23,7 +23,6 @@ func NewNPUCollector(dClient *daemon.Client, registry prometheus.Registerer, isK
 		NewUtilizationMetric(podResourceMapper, nodeName, isKubernetes),
 		NewDeviceStateMetric(podResourceMapper, nodeName, isKubernetes),
 		NewPowerStateMetric(podResourceMapper, nodeName, isKubernetes),
-		NewClockMetric(podResourceMapper, nodeName, isKubernetes),
 		NewPCIeLinkMetric(podResourceMapper, nodeName, isKubernetes),
 		NewDeviceInfoMetric(podResourceMapper, nodeName, isKubernetes),
 	}
