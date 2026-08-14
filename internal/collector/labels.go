@@ -21,7 +21,6 @@ const (
 	firmwareVersion = "firmware_version"
 
 	state = "state"
-	clock = "clock"
 
 	smcVersion = "smc_version"
 	pciBusID   = "pci_bus_id"

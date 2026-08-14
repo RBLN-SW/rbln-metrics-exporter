@@ -21,16 +21,6 @@ const (
 	PStateUnavailable = -1
 )
 
-const (
-	ClockCP0  = "cp0"
-	ClockCP1  = "cp1"
-	ClockDC0  = "dc0"
-	ClockDC1  = "dc1"
-	ClockBus  = "bus"
-	ClockSHM  = "shm"
-	ClockDRAM = "dram"
-)
-
 type Client struct {
 	conn   *grpc.ClientConn
 	client rblnservicespb.RBLNServicesClient
@@ -105,7 +95,6 @@ type DeviceInfo struct {
 	ErrStatus       int
 	DevState        rblnservicespb.DeviceStatus
 	PState          int32
-	Clocks          map[string]float64
 	Topology        *TopologyInfo
 }
 
@@ -170,11 +159,6 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			slog.Warn("failed to get version", "device", dev.GetName(), "err", err)
 			return nil, fmt.Errorf("failed to get version for %s: %v", dev.GetName(), err)
 		}
-		di.Clocks, err = c.getClocks(ctx, dev.GetName())
-		if err != nil {
-			slog.Warn("failed to get clock info", "device", dev.GetName(), "err", err)
-			return nil, fmt.Errorf("failed to get clock info for %s: %v", dev.GetName(), err)
-		}
 
 		merged = append(merged, di)
 	}
@@ -218,38 +202,6 @@ func (c *Client) getSMCVersion(ctx context.Context, name string) (string, error)
 		return "", nil
 	}
 	return version.GetSmcVersion(), nil
-}
-
-func (c *Client) getClocks(ctx context.Context, name string) (map[string]float64, error) {
-	clock, err := c.client.GetClockInfo(ctx, &rblnservicespb.Device{Name: name})
-	if err != nil {
-		return nil, fmt.Errorf("failed to GetClockInfo RPC: %w", err)
-	}
-	if clock.GetErrStatus() != rblnservicespb.Status_SUCCEED {
-		slog.Debug("daemon returned no clock info", "device", name)
-		return nil, nil
-	}
-	return clockMap(clock), nil
-}
-
-func clockMap(clock *rblnservicespb.ClockInfo) map[string]float64 {
-	clocks := make(map[string]float64, 7)
-	put := func(label string, mhz int32) {
-		// The daemon encodes "clock not implemented on this platform" as 0
-		// (ATOM has no cp1/dram, REBEL has no shm); skip those instead of
-		// exposing a fake 0 MHz reading.
-		if mhz > 0 {
-			clocks[label] = float64(mhz)
-		}
-	}
-	put(ClockCP0, clock.GetCp_0Clock())
-	put(ClockCP1, clock.GetCp_1Clock())
-	put(ClockDC0, clock.GetDc_0Clock())
-	put(ClockDC1, clock.GetDc_1Clock())
-	put(ClockBus, clock.GetBusClock())
-	put(ClockSHM, clock.GetShmClock())
-	put(ClockDRAM, clock.GetDramClock())
-	return clocks
 }
 
 func (c *Client) getServiceableDevices(ctx context.Context) ([]*rblnservicespb.Device, error) {
