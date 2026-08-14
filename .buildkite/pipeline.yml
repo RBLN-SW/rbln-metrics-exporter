@@ -41,12 +41,26 @@ env:
 
   # Driver/daemon chart defaults (repo.rebellions.ai) aren't pullable yet, so
   # override to the dev registry — same values as the operator nightly.
+  #
+  # Family separation: registry/repository stay family-AGNOSTIC — the operator
+  # splices the family segment into the pull path per node pool
+  # (rebellions-dev/<family>/rbln-driver:<ver>-<kernel>-<os>), so the version is
+  # pinned per family. The retired global SENTINEL_DRIVER_IMAGE_TAG applied one
+  # version to every family; 3.2.0 has no atom build for this cluster's
+  # ubuntu22.04 kernels and no rebel100 build at all, so it now fails the
+  # operator's driver image check (DriverImageNotFound) instead of installing.
   SENTINEL_DRIVER_IMAGE_REGISTRY: harbor.ssw.rbln.in
   SENTINEL_DRIVER_IMAGE_REPOSITORY: rebellions-dev/rbln-driver
-  SENTINEL_DRIVER_IMAGE_TAG: "${SENTINEL_DRIVER_IMAGE_TAG:-3.2.0}"
+  SENTINEL_ATOM_DRIVER_VERSION: "${SENTINEL_ATOM_DRIVER_VERSION:-3.2.2}"
+  SENTINEL_REBEL100_DRIVER_VERSION: "${SENTINEL_REBEL100_DRIVER_VERSION:-3.3.0-rc3}"
+  # NPU family set. Pinned rather than auto-detected (npu.family labels ->
+  # NodeFeature PCI fallback) so a node that is temporarily unlabeled cannot
+  # silently shrink the set and change which RBLNDriver CRs get rendered.
+  SENTINEL_NPU_FAMILIES: "${SENTINEL_NPU_FAMILIES:-atom,rebel100}"
   SENTINEL_RBLN_DAEMON_IMAGE_REGISTRY: harbor.ssw.rbln.in
   SENTINEL_RBLN_DAEMON_IMAGE_REPOSITORY: rebellions-dev/rbln-daemon
-  SENTINEL_RBLN_DAEMON_IMAGE_TAG: "${SENTINEL_RBLN_DAEMON_IMAGE_TAG:-3.2.0}"
+  # Paired with the atom driver above; rbln-daemon is not family-split.
+  SENTINEL_RBLN_DAEMON_IMAGE_TAG: "${SENTINEL_RBLN_DAEMON_IMAGE_TAG:-3.2.2}"
 
 agents:
   queue: "k8s"
