@@ -71,7 +71,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	up.Set(1)
 	for _, c := range collectorFactory.NewCollectors() {
 		if err := c.GetMetrics(ctx); err != nil {
-			slog.Warn("gateway collect failed", "target", target, "err", err)
+			slog.Warn("Gateway collect failed", "target", target, "err", err,
+				"effect", "scrape returns rbln_up 0")
 			up.Set(0)
 			break
 		}
@@ -85,7 +86,8 @@ func (h *Handler) Close() {
 	defer h.mu.Unlock()
 	for target, client := range h.clients {
 		if err := client.Close(); err != nil {
-			slog.Warn("failed to close daemon client", "target", target, "err", err)
+			slog.Warn("Failed to close daemon client", "target", target, "err", err,
+				"effect", "connection may leak until process exit")
 		}
 	}
 	clear(h.clients)

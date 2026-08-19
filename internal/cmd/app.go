@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -42,7 +43,7 @@ func Start(ctx context.Context, config Config) error {
 	slog.Info("Starting rbln-metrics-exporter", "config", config)
 	if os.Getenv("PROMETHEUS_METRIC_NAMES") != "true" {
 		slog.Warn(
-			"legacy metric names are deprecated and will be removed in the next version; set PROMETHEUS_METRIC_NAMES=true to enable the new metric names",
+			"Legacy metric names are deprecated and will be removed in the next version; set PROMETHEUS_METRIC_NAMES=true to enable the new metric names",
 			"env", "PROMETHEUS_METRIC_NAMES",
 		)
 	}
@@ -89,8 +90,7 @@ func Start(ctx context.Context, config Config) error {
 
 	server := server.NewMetricServer(metricRegistry, config.Port)
 	if err := server.Start(ctx); err != nil {
-		slog.Error("http metrics server stopped", "err", err)
-		return err
+		return fmt.Errorf("http metrics server stopped: %w", err)
 	}
 
 	return nil
@@ -105,8 +105,7 @@ func startGateway(ctx context.Context, config Config) error {
 
 	srv := server.NewServer(mux, config.Port)
 	if err := srv.Start(ctx); err != nil {
-		slog.Error("http metrics server stopped", "err", err)
-		return err
+		return fmt.Errorf("http metrics server stopped: %w", err)
 	}
 
 	return nil

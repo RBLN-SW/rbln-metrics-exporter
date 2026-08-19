@@ -48,7 +48,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 		case <-ticker.C:
 			cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			if err := s.RunOnce(cycleCtx); err != nil {
-				slog.Warn("collect metrics failed", slog.Any("err", err))
+				slog.Warn("Metrics collection failed", "err", err,
+					"effect", "metrics cleared until next successful collect")
 			}
 			cancel()
 		}

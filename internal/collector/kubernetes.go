@@ -49,7 +49,8 @@ func NewPodResourceMapper(ctx context.Context) (*PodResourceMapper, error) {
 	}
 
 	if err := m.syncPodResources(); err != nil {
-		slog.Warn("initial pod resource sync failed", "err", err)
+		slog.Warn("Initial pod resource sync failed", "err", err,
+			"effect", "pod attribution missing until first successful sync")
 	}
 
 	go func() {
@@ -85,7 +86,8 @@ func (p *PodResourceMapper) runSyncLoop(ctx context.Context) {
 		select {
 		case <-p.syncRequests:
 			if err := p.syncPodResources(); err != nil {
-				slog.Warn("Failed to sync pod resources", "err", err)
+				slog.Warn("Failed to sync pod resources", "err", err,
+					"effect", "pod attribution stale until next successful sync")
 			}
 		case <-ctx.Done():
 			return
@@ -137,12 +139,10 @@ func (p *PodResourceMapper) getPodResources() (*podResourcesAPI.ListPodResources
 
 func newKubeletClient() (*grpc.ClientConn, func(), error) {
 	if _, err := os.Stat(PodResourceSocket); err != nil {
-		slog.Error("kubelet pod-resources socket unavailable", "socket", PodResourceSocket, "err", err)
 		return nil, func() {}, fmt.Errorf("kubelet pod-resources socket unavailable, %w", err)
 	}
 	conn, err := grpc.NewClient("unix://"+PodResourceSocket, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		slog.Error("failed to create kubelet client", "err", err)
 		return nil, func() {}, fmt.Errorf("failed to create kubelet client, %w", err)
 	}
 	return conn, func() {

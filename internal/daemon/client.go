@@ -101,20 +101,17 @@ type DeviceInfo struct {
 func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 	devices, err := c.getServiceableDevices(ctx)
 	if err != nil {
-		slog.Warn("failed to get serviceable devices", "err", err)
-		return nil, fmt.Errorf("failed to get serviceable devices: %v", err)
+		return nil, fmt.Errorf("failed to get serviceable devices: %w", err)
 	}
 
 	totalInfos, err := c.getTotalDeviceInfo(ctx)
 	if err != nil {
-		slog.Warn("failed to get total device info", "err", err)
-		return nil, fmt.Errorf("failed to get total device info: %v", err)
+		return nil, fmt.Errorf("failed to get total device info: %w", err)
 	}
 
 	topologies, err := c.getTopologyByName(ctx)
 	if err != nil {
-		slog.Warn("failed to list topology", "err", err)
-		return nil, fmt.Errorf("failed to list topology: %v", err)
+		return nil, fmt.Errorf("failed to list topology: %w", err)
 	}
 
 	// Key by name, not UUID: getTotalInfo includes SR-IOV VFs, which share
@@ -156,8 +153,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 
 		di.SMCVersion, err = c.getSMCVersion(ctx, dev.GetName())
 		if err != nil {
-			slog.Warn("failed to get version", "device", dev.GetName(), "err", err)
-			return nil, fmt.Errorf("failed to get version for %s: %v", dev.GetName(), err)
+			return nil, fmt.Errorf("failed to get version for %s: %w", dev.GetName(), err)
 		}
 
 		merged = append(merged, di)
@@ -177,7 +173,7 @@ func (c *Client) getTopologyByName(ctx context.Context) (map[string]*TopologyInf
 		// A failed entry's zero values are indistinguishable from real
 		// readings (e.g. numa_node 0), so skip it entirely.
 		if entryErr := entry.GetError(); entryErr.GetCode() != 0 || entryErr.GetMessage() != "" {
-			slog.Debug("skipping topology entry with error",
+			slog.Debug("Skipping topology entry with error",
 				"device", entry.GetDeviceName(), "code", entryErr.GetCode(), "message", entryErr.GetMessage())
 			continue
 		}
@@ -198,7 +194,7 @@ func (c *Client) getSMCVersion(ctx context.Context, name string) (string, error)
 		return "", fmt.Errorf("failed to GetVersion RPC: %w", err)
 	}
 	if version.GetErrStatus() != rblnservicespb.Status_SUCCEED {
-		slog.Debug("daemon returned no version", "device", name)
+		slog.Debug("Daemon returned no version", "device", name)
 		return "", nil
 	}
 	return version.GetSmcVersion(), nil
