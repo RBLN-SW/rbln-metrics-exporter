@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	podResourcesAPI "k8s.io/kubelet/pkg/apis/podresources/v1alpha1"
+
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 )
 
 const (
@@ -113,11 +115,17 @@ func (p *PodResourceMapper) syncPodResources() error {
 							Namespace:     pod.Namespace,
 							ContainerName: container.Name,
 						}
+						slog.Log(context.Background(), logging.LevelTrace, "Mapped device to pod",
+							"deviceId", deviceID, "pod", pod.Name, "namespace", pod.Namespace,
+							"container", container.Name, "resource", containerDevice.GetResourceName())
 					}
 				}
 			}
 		}
 	}
+
+	slog.Debug("Synced pod resources",
+		"devices", len(podResourcesInfo), "pods", len(podResources.GetPodResources()))
 
 	p.Lock()
 	defer p.Unlock()

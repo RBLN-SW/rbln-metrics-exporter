@@ -64,6 +64,7 @@ func Start(ctx context.Context, config Config) error {
 
 	metricRegistry := prometheus.NewRegistry()
 	isKubernetes := resolveKubernetesMode(config.KubernetesMode)
+	slog.Debug("Resolved Kubernetes mode", "mode", config.KubernetesMode, "kubernetes", isKubernetes)
 	var podResourceMapper *collector.PodResourceMapper
 	if isKubernetes {
 		podResourceMapper, err = collector.NewPodResourceMapper(ctx)

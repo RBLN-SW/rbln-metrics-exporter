@@ -39,16 +39,19 @@ func NewHandler() *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := stripSchemePrefix(r.URL.Query().Get("target"))
 	if target == "" {
+		slog.Debug("Rejected scrape request", "reason", "missing target parameter")
 		http.Error(w, "missing required parameter: target=<host:port> of an rbln-smd grpc endpoint", http.StatusBadRequest)
 		return
 	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
+		slog.Debug("Rejected scrape request", "target", target, "err", err)
 		http.Error(w, fmt.Sprintf("invalid target %q: expected <host:port>: %v", target, err), http.StatusBadRequest)
 		return
 	}
 
 	client, err := h.clientFor(target)
 	if err != nil {
+		slog.Debug("Rejected scrape request", "target", target, "err", err)
 		http.Error(w, fmt.Sprintf("invalid target %q: %v", target, err), http.StatusBadRequest)
 		return
 	}
@@ -65,7 +68,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		false,
 	)
 
-	ctx, cancel := context.WithTimeout(r.Context(), scrapeTimeout(r))
+	timeout := scrapeTimeout(r)
+	slog.Debug("Scraping gateway target",
+		"target", target, "timeout", timeout.String(), "host", hostLabel(target))
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	up.Set(1)
@@ -98,6 +104,7 @@ func (h *Handler) clientFor(target string) (*daemon.Client, error) {
 	defer h.mu.Unlock()
 
 	if client, ok := h.clients[target]; ok {
+		slog.Debug("Reusing cached daemon client", "target", target)
 		return client, nil
 	}
 	client, err := daemon.NewLazyClient(target)
@@ -105,6 +112,7 @@ func (h *Handler) clientFor(target string) (*daemon.Client, error) {
 		return nil, err
 	}
 	h.clients[target] = client
+	slog.Debug("Created daemon client", "target", target)
 	return client, nil
 }
 

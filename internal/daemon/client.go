@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 	"github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
 )
 
@@ -149,6 +150,8 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			di.ErrStatus = int(info.GetErrStatus())
 			di.DevState = info.GetDevStatus()
 			di.PState = info.GetPState()
+		} else {
+			slog.Debug("Device missing from total info; telemetry zeroed", "device", dev.GetName())
 		}
 
 		di.SMCVersion, err = c.getSMCVersion(ctx, dev.GetName())
@@ -157,8 +160,13 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 		}
 
 		merged = append(merged, di)
+		slog.Log(ctx, logging.LevelTrace, "Merged device",
+			"device", di.Name, "uuid", di.UUID, "state", di.DevState.String(),
+			"pstate", di.PState, "errStatus", di.ErrStatus)
 	}
 
+	slog.Debug("Merged device info", "devices", len(devices),
+		"totalInfos", len(totalInfos), "topologies", len(topologies), "merged", len(merged))
 	return merged, nil
 }
 
