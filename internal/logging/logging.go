@@ -1,9 +1,6 @@
-// Package logging configures the process-wide slog logger according to the
-// RBLN logging contract (rbln-npu-operator/docs/logging.md).
-//
-// Canonical copy — 수정 시 모든 repo의 복사본을 함께 갱신할 것:
-// rbln-metrics-exporter, rbln-npu-feature-discovery, rbln-k8s-driver-manager,
-// sandbox-device-plugin, rbln-npu-operator.
+// Package logging configures the process-wide slog logger: structured json
+// or text records controlled by LOG_LEVEL and LOG_FORMAT, defaulting to
+// info/json.
 package logging
 
 import (
@@ -15,10 +12,10 @@ import (
 	"time"
 )
 
-// LevelTrace extends slog's levels downward for the contract's "trace" level.
+// LevelTrace extends slog's levels downward with a "trace" level below debug.
 const LevelTrace = slog.Level(-8)
 
-// New builds a contract-conformant slog logger writing to w.
+// New builds a slog logger writing to w.
 // level: "error"|"warning"|"info"|"debug"|"trace" ("" = info).
 // format: "json"|"text" ("" = json).
 func New(w io.Writer, level, format string) (*slog.Logger, error) {
@@ -28,7 +25,7 @@ func New(w io.Writer, level, format string) (*slog.Logger, error) {
 	}
 	opts := &slog.HandlerOptions{
 		Level: lvl,
-		// caller 비용/노이즈는 debug 이상에서만 감수한다.
+		// Caller info is only worth its cost/noise at debug and trace verbosity.
 		AddSource:   lvl <= slog.LevelDebug,
 		ReplaceAttr: replaceAttr,
 	}
@@ -46,21 +43,16 @@ func New(w io.Writer, level, format string) (*slog.Logger, error) {
 	return slog.New(h), nil
 }
 
-// Setup installs the process-wide default logger (stdout).
-func Setup(level, format string) error {
-	logger, err := New(os.Stdout, level, format)
-	if err != nil {
-		return err
-	}
-	slog.SetDefault(logger)
-	return nil
+// SetupFromEnv reads LOG_LEVEL / LOG_FORMAT and installs the logger.
+// Empty values mean info/json (production defaults). Invalid values do not
+// kill the process — a typo in a DaemonSet env would CrashLoopBackOff the
+// exporter and drop all telemetry from the node. Instead, only the offending
+// variable falls back to its default, recorded by a Warn with a "fallback" key.
+func SetupFromEnv() {
+	setupFromEnv(os.Stdout)
 }
 
-// SetupFromEnv reads LOG_LEVEL / LOG_FORMAT and installs the logger.
-// 빈 값이면 info/json (프로덕션 기본). Invalid 값은 프로세스를 죽이지 않는다:
-// 해당 변수만 계약 기본값으로 대체하고, 설치된 로거로 "fallback" 키를 담은
-// Warn을 남긴다 (contract: substituting a default adds a fallback key).
-func SetupFromEnv() {
+func setupFromEnv(w io.Writer) {
 	level, format := os.Getenv("LOG_LEVEL"), os.Getenv("LOG_FORMAT")
 	var levelErr, formatErr error
 	if _, err := parseLevel(level); err != nil {
@@ -69,13 +61,16 @@ func SetupFromEnv() {
 	if _, err := parseFormat(format); err != nil {
 		formatErr, format = err, "json"
 	}
-	if err := Setup(level, format); err != nil {
-		// 위에서 검증/대체했으므로 도달 불가.
+	logger, err := New(w, level, format)
+	if err != nil {
+		// Unreachable: both inputs were validated or substituted above.
 		slog.Error("Failed to install logger", "err", err)
 		return
 	}
-	// LOG_LEVEL=error + invalid LOG_FORMAT이면 format Warn이 게이트에 억제된다 —
-	// 명시적으로 error 게이트를 고른 결과이므로 수용.
+	slog.SetDefault(logger)
+	// With LOG_LEVEL=error and an invalid LOG_FORMAT, the format Warn is
+	// suppressed by the level gate — accepted, since the error gate was
+	// explicitly requested.
 	if levelErr != nil {
 		slog.Warn("Invalid LOG_LEVEL, using default", "err", levelErr, "fallback", "info")
 	}
@@ -110,16 +105,19 @@ func parseFormat(s string) (string, error) {
 	return "", fmt.Errorf("unknown log format %q (json|text)", s)
 }
 
-// replaceAttr normalizes slog output to the contract: key "ts" with
-// RFC3339Nano, lowercase "level" ("trace" for LevelTrace), and a zap-style
-// "caller" ("file:line") instead of the verbose source group.
+// replaceAttr normalizes slog output: key "ts" with RFC3339Nano, lowercase
+// "level" ("trace" for LevelTrace), and a zap-style "caller" ("file:line")
+// instead of the verbose source group.
 func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) > 0 {
 		return a
 	}
 	switch a.Key {
 	case slog.TimeKey:
-		// 사용자 attr가 "time" 키를 쓸 수 있다 — 레코드 타임스탬프만 변환한다.
+		// A user attr may also use the "time" key — convert only the record
+		// timestamp. Residual limitation: a user "time" attr that is itself
+		// KindTime is indistinguishable from the record timestamp, so it is
+		// also renamed, duplicating the "ts" key in that record.
 		if a.Value.Kind() != slog.KindTime {
 			return a
 		}

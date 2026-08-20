@@ -37,7 +37,7 @@ func logLine(t *testing.T, level, format, emit string) map[string]any {
 	return m
 }
 
-func TestNewDefaultsToInfoJSONWithContractKeys(t *testing.T) {
+func TestNewDefaultsToInfoJSON(t *testing.T) {
 	m := logLine(t, "", "", "info")
 	if m == nil {
 		t.Fatal("info line suppressed at default level")
@@ -164,17 +164,106 @@ func TestTrimPath(t *testing.T) {
 	}
 }
 
+func jsonLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var recs []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("not JSON: %v: %s", err, line)
+		}
+		recs = append(recs, m)
+	}
+	return recs
+}
+
 func TestSetupFromEnvFallsBack(t *testing.T) {
 	old := slog.Default()
 	defer slog.SetDefault(old)
 	t.Setenv("LOG_LEVEL", "bogus")
 	t.Setenv("LOG_FORMAT", "json")
-	SetupFromEnv()
+	var buf bytes.Buffer
+	setupFromEnv(&buf)
 	ctx := context.Background()
 	if !slog.Default().Enabled(ctx, slog.LevelInfo) {
 		t.Fatal("fallback logger must enable info")
 	}
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		t.Fatal("fallback logger must gate debug (info default)")
+	}
+}
+
+func TestSetupFromEnvWarnsFallbackRecordOnInvalidLevel(t *testing.T) {
+	old := slog.Default()
+	defer slog.SetDefault(old)
+	t.Setenv("LOG_LEVEL", "bogus")
+	t.Setenv("LOG_FORMAT", "json")
+	var buf bytes.Buffer
+	setupFromEnv(&buf)
+	recs := jsonLines(t, &buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d records, want 1 fallback warn: %s", len(recs), buf.String())
+	}
+	m := recs[0]
+	if m["level"] != "warn" || m["msg"] != "Invalid LOG_LEVEL, using default" {
+		t.Fatalf("record = %v, want LOG_LEVEL fallback warn", m)
+	}
+	if m["fallback"] != "info" {
+		t.Fatalf("fallback = %v, want info", m["fallback"])
+	}
+	errStr, ok := m["err"].(string)
+	if !ok || !strings.Contains(errStr, "bogus") {
+		t.Fatalf("err = %v, want message naming the rejected value", m["err"])
+	}
+}
+
+func TestSetupFromEnvWarnsFallbackRecordOnInvalidFormat(t *testing.T) {
+	old := slog.Default()
+	defer slog.SetDefault(old)
+	t.Setenv("LOG_LEVEL", "info")
+	t.Setenv("LOG_FORMAT", "xml")
+	var buf bytes.Buffer
+	setupFromEnv(&buf)
+	recs := jsonLines(t, &buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d records, want 1 fallback warn: %s", len(recs), buf.String())
+	}
+	m := recs[0]
+	if m["level"] != "warn" || m["msg"] != "Invalid LOG_FORMAT, using default" {
+		t.Fatalf("record = %v, want LOG_FORMAT fallback warn", m)
+	}
+	if m["fallback"] != "json" {
+		t.Fatalf("fallback = %v, want json", m["fallback"])
+	}
+	if _, ok := m["err"].(string); !ok {
+		t.Fatalf("err = %v, want string", m["err"])
+	}
+}
+
+func TestParseInputsTolerateWhitespaceAndCase(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want slog.Level
+	}{
+		{" INFO ", slog.LevelInfo},
+		{"Warning", slog.LevelWarn},
+		{"TRACE", LevelTrace},
+	} {
+		got, err := parseLevel(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("parseLevel(%q) = %v, %v, want %v", tc.in, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ in, want string }{
+		{" JSON ", "json"},
+		{"Text", "text"},
+	} {
+		got, err := parseFormat(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("parseFormat(%q) = %v, %v, want %q", tc.in, got, err, tc.want)
+		}
 	}
 }

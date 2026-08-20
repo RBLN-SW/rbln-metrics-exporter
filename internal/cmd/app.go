@@ -39,8 +39,18 @@ func NewApp() *cobra.Command {
 	return cmd
 }
 
+// Version is stamped at build time via
+// -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=...".
+var Version = "dev"
+
+// logStartup records the snapshot needed to read the rest of the logs cold:
+// which build is running and every resolved knob that shapes its behavior.
+func logStartup(cfg Config) {
+	slog.Info("Starting rbln-metrics-exporter", "version", Version, "config", cfg)
+}
+
 func Start(ctx context.Context, config Config) error {
-	slog.Info("Starting rbln-metrics-exporter", "config", config)
+	logStartup(config)
 	if os.Getenv("PROMETHEUS_METRIC_NAMES") != "true" {
 		slog.Warn(
 			"Legacy metric names are deprecated and will be removed in the next version; set PROMETHEUS_METRIC_NAMES=true to enable the new metric names",
@@ -64,7 +74,6 @@ func Start(ctx context.Context, config Config) error {
 
 	metricRegistry := prometheus.NewRegistry()
 	isKubernetes := resolveKubernetesMode(config.KubernetesMode)
-	slog.Debug("Resolved Kubernetes mode", "mode", config.KubernetesMode, "kubernetes", isKubernetes)
 	var podResourceMapper *collector.PodResourceMapper
 	if isKubernetes {
 		podResourceMapper, err = collector.NewPodResourceMapper(ctx)
@@ -113,12 +122,17 @@ func startGateway(ctx context.Context, config Config) error {
 }
 
 func resolveKubernetesMode(mode string) bool {
+	var kubernetes bool
 	switch mode {
 	case KubernetesModeOn:
-		return true
+		kubernetes = true
 	case KubernetesModeOff:
-		return false
+		kubernetes = false
 	default:
-		return collector.IsKubernetes()
+		kubernetes = collector.IsKubernetes()
 	}
+	// The resolved mode decides whether pod attribution exists at all, so it
+	// belongs in the info-level startup story, not behind the debug gate.
+	slog.Info("Resolved Kubernetes mode", "mode", mode, "kubernetes", kubernetes)
+	return kubernetes
 }

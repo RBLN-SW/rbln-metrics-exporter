@@ -14,6 +14,8 @@ type Scheduler struct {
 	interval          time.Duration
 	podResourceMapper *collector.PodResourceMapper
 	up                prometheus.Gauge
+	// Only touched from the Run goroutine.
+	consecutiveFailures int
 }
 
 func NewScheduler(podResourceMapper *collector.PodResourceMapper, collectors []collector.Collector, interval time.Duration, up prometheus.Gauge) *Scheduler {
@@ -46,12 +48,26 @@ func (s *Scheduler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := s.RunOnce(cycleCtx); err != nil {
-				slog.Warn("Metrics collection failed", "err", err,
-					"effect", "metrics cleared until next successful collect")
-			}
-			cancel()
+			s.runCycle(ctx)
 		}
+	}
+}
+
+// runCycle wraps RunOnce with failure-streak tracking so the logs mark both
+// edges of an outage: each failed cycle carries its streak position, and the
+// first success afterward records how many cycles were lost.
+func (s *Scheduler) runCycle(ctx context.Context) {
+	cycleCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.RunOnce(cycleCtx); err != nil {
+		s.consecutiveFailures++
+		slog.Warn("Metrics collection failed", "err", err,
+			"consecutive_failures", s.consecutiveFailures,
+			"effect", "metrics cleared until next successful collect")
+		return
+	}
+	if s.consecutiveFailures > 0 {
+		slog.Info("Metrics collection recovered", "failed_cycles", s.consecutiveFailures)
+		s.consecutiveFailures = 0
 	}
 }
