@@ -55,12 +55,12 @@ func TestLogStartupEmitsVersionAndReadableConfig(t *testing.T) {
 		t.Fatalf("config not a group: %v", m["config"])
 	}
 	for key, want := range map[string]any{
-		"mode":            "local",
-		"daemon":          "127.0.0.1:50051",
-		"port":            float64(9090),
-		"interval":        "5s",
-		"node":            "node-1",
-		"kubernetes_mode": "auto",
+		"mode":           "local",
+		"daemon":         "127.0.0.1:50051",
+		"port":           float64(9090),
+		"interval":       "5s",
+		"node":           "node-1",
+		"kubernetesMode": "auto",
 	} {
 		if cfg[key] != want {
 			t.Fatalf("config.%s = %v, want %v", key, cfg[key], want)
@@ -84,8 +84,8 @@ func TestResolveKubernetesModeLogsResolution(t *testing.T) {
 		if m["level"] != "info" || m["msg"] != "Resolved Kubernetes mode" {
 			t.Fatalf("record = %v, want info resolution record", m)
 		}
-		if m["mode"] != tc.mode || m["kubernetes"] != tc.want {
-			t.Fatalf("mode/kubernetes = %v/%v, want %v/%v", m["mode"], m["kubernetes"], tc.mode, tc.want)
+		if m["kubernetesMode"] != tc.mode || m["kubernetes"] != tc.want {
+			t.Fatalf("kubernetesMode/kubernetes = %v/%v, want %v/%v", m["kubernetesMode"], m["kubernetes"], tc.mode, tc.want)
 		}
 	}
 }

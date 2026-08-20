@@ -133,6 +133,6 @@ func resolveKubernetesMode(mode string) bool {
 	}
 	// The resolved mode decides whether pod attribution exists at all, so it
 	// belongs in the info-level startup story, not behind the debug gate.
-	slog.Info("Resolved Kubernetes mode", "mode", mode, "kubernetes", kubernetes)
+	slog.Info("Resolved Kubernetes mode", "kubernetesMode", mode, "kubernetes", kubernetes)
 	return kubernetes
 }

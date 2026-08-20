@@ -62,12 +62,12 @@ func (s *Scheduler) runCycle(ctx context.Context) {
 	if err := s.RunOnce(cycleCtx); err != nil {
 		s.consecutiveFailures++
 		slog.Warn("Metrics collection failed", "err", err,
-			"consecutive_failures", s.consecutiveFailures,
+			"consecutiveFailures", s.consecutiveFailures,
 			"effect", "metrics cleared until next successful collect")
 		return
 	}
 	if s.consecutiveFailures > 0 {
-		slog.Info("Metrics collection recovered", "failed_cycles", s.consecutiveFailures)
+		slog.Info("Metrics collection recovered", "failedCycles", s.consecutiveFailures)
 		s.consecutiveFailures = 0
 	}
 }

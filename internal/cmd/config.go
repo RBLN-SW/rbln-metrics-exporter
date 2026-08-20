@@ -27,7 +27,7 @@ type Config struct {
 }
 
 // LogValue renders the resolved configuration for the startup record with
-// stable lowercase keys and a human-readable interval.
+// stable camelCase keys and a human-readable interval.
 func (c Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("mode", c.Mode),
@@ -36,7 +36,7 @@ func (c Config) LogValue() slog.Value {
 		slog.String("interval", c.Interval.String()),
 		slog.Bool("oneshot", c.Oneshot),
 		slog.String("node", c.NodeName),
-		slog.String("kubernetes_mode", c.KubernetesMode),
+		slog.String("kubernetesMode", c.KubernetesMode),
 	)
 }
 

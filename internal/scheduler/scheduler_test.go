@@ -77,16 +77,16 @@ func TestRunCycleLogsFailureStreakAndRecovery(t *testing.T) {
 		if recs[i]["level"] != "warn" || recs[i]["msg"] != "Metrics collection failed" {
 			t.Fatalf("record %d = %v, want failure warn", i, recs[i])
 		}
-		if recs[i]["consecutive_failures"] != wantStreak {
-			t.Fatalf("record %d consecutive_failures = %v, want %v", i, recs[i]["consecutive_failures"], wantStreak)
+		if recs[i]["consecutiveFailures"] != wantStreak {
+			t.Fatalf("record %d consecutiveFailures = %v, want %v", i, recs[i]["consecutiveFailures"], wantStreak)
 		}
 	}
 	rec := recs[2]
 	if rec["level"] != "info" || rec["msg"] != "Metrics collection recovered" {
 		t.Fatalf("record 2 = %v, want recovery info", rec)
 	}
-	if rec["failed_cycles"] != float64(2) {
-		t.Fatalf("failed_cycles = %v, want 2", rec["failed_cycles"])
+	if rec["failedCycles"] != float64(2) {
+		t.Fatalf("failedCycles = %v, want 2", rec["failedCycles"])
 	}
 }
 
