@@ -59,9 +59,11 @@ IMAGE_NAME ?= $(REGISTRY)/rbln-metrics-exporter
 IMAGE_TAG ?= $(VERSION)
 IMAGE := $(IMAGE_NAME):$(IMAGE_TAG)
 
+GO_LDFLAGS := -X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=$(VERSION)
+
 .PHONY: build
 build:
-	CGO_ENABLED=0 $(GO) build -o bin/$(BINARY) $(CMD_DIR)
+	CGO_ENABLED=0 $(GO) build -ldflags "$(GO_LDFLAGS)" -o bin/$(BINARY) $(CMD_DIR)
 
 .PHONY: clean
 clean:

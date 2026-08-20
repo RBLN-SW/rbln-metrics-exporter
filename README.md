@@ -75,6 +75,12 @@ Flags:
 | `RBLN_METRICS_EXPORTER_KUBERNETES_MODE` | `auto` | Kubernetes integration: `auto`, `on`, or `off` |
 | `RBLN_METRICS_EXPORTER_ONESHOT` | `false` | When `true`, scrape once and exit |
 | `NODE_NAME` | auto-detected | Overrides the node label inserted into metrics |
+| `LOG_LEVEL` | `info` | Log level: `error`, `warning`, `info`, `debug`, or `trace` |
+| `LOG_FORMAT` | `json` | Log output format: `json` or `text` |
+
+> `LOG_LEVEL=warning` is emitted in logs as `"level":"warn"` (slog's canonical spelling) — write dashboard/alert filters against `warn`, not `warning`.
+
+> **For log pipelines:** records are single-line JSON (NDJSON) on **stdout**. The timestamp key is `ts` in RFC3339Nano with variable fractional digits — set Fluent Bit's JSON parser to `Time_Key ts`; promtail's `RFC3339Nano` format works as-is. The message key is `msg`, the error key is `err`, and `caller` (`pkg/file.go:N`) appears only at `debug`/`trace`. Keep `json` in-cluster; `text` is meant for local debugging.
 
 
 ---

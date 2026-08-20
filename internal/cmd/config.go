@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,20 @@ type Config struct {
 	Oneshot        bool
 	NodeName       string
 	KubernetesMode string
+}
+
+// LogValue renders the resolved configuration for the startup record with
+// stable camelCase keys and a human-readable interval.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("mode", c.Mode),
+		slog.String("daemon", c.RBLNDaemonURL),
+		slog.Int("port", c.Port),
+		slog.String("interval", c.Interval.String()),
+		slog.Bool("oneshot", c.Oneshot),
+		slog.String("node", c.NodeName),
+		slog.String("kubernetesMode", c.KubernetesMode),
+	)
 }
 
 type configBuilder struct {

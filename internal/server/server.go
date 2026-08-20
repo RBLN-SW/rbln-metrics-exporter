@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,6 +27,10 @@ func NewServer(handler http.Handler, port int) *MetricServer {
 		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Without ErrorLog, net/http's internal records (handler panics,
+		// protocol errors) reach slog through the stdlib-log bridge at info,
+		// invisible to level-based alerting.
+		ErrorLog: slog.NewLogLogger(slog.Default().Handler(), slog.LevelError),
 	}
 
 	return &MetricServer{

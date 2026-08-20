@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 	"github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
 )
 
@@ -22,8 +24,28 @@ const (
 )
 
 type Client struct {
-	conn   *grpc.ClientConn
-	client rblnservicespb.RBLNServicesClient
+	conn     *grpc.ClientConn
+	client   rblnservicespb.RBLNServicesClient
+	endpoint string
+
+	// Edge-tracking state for the device-visibility records; guarded by mu
+	// because gateway mode may serve concurrent scrapes on one cached client.
+	mu            sync.Mutex
+	collectedOnce bool
+	prevMissing   map[string]bool
+	prevHealth    map[string]deviceHealth
+}
+
+// deviceHealth is the health-relevant slice of a device's state. READY/BUSY
+// activity churn is deliberately excluded so steady state stays silent in
+// the logs; the full state is always available via the device-state metric.
+type deviceHealth struct {
+	state     rblnservicespb.DeviceStatus
+	errStatus int
+}
+
+func (h deviceHealth) degraded() bool {
+	return h.state == rblnservicespb.DeviceStatus_FAULT || h.errStatus != 0
 }
 
 func NewClient(ctx context.Context, endpoint string) (*Client, error) {
@@ -43,8 +65,9 @@ func NewClient(ctx context.Context, endpoint string) (*Client, error) {
 
 	c := rblnservicespb.NewRBLNServicesClient(conn)
 	return &Client{
-		conn:   conn,
-		client: c,
+		conn:     conn,
+		client:   c,
+		endpoint: endpoint,
 	}, nil
 }
 
@@ -58,8 +81,9 @@ func NewLazyClient(endpoint string) (*Client, error) {
 	}
 
 	return &Client{
-		conn:   conn,
-		client: rblnservicespb.NewRBLNServicesClient(conn),
+		conn:     conn,
+		client:   rblnservicespb.NewRBLNServicesClient(conn),
+		endpoint: endpoint,
 	}, nil
 }
 
@@ -101,20 +125,17 @@ type DeviceInfo struct {
 func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 	devices, err := c.getServiceableDevices(ctx)
 	if err != nil {
-		slog.Warn("failed to get serviceable devices", "err", err)
-		return nil, fmt.Errorf("failed to get serviceable devices: %v", err)
+		return nil, fmt.Errorf("failed to get serviceable devices: %w", err)
 	}
 
 	totalInfos, err := c.getTotalDeviceInfo(ctx)
 	if err != nil {
-		slog.Warn("failed to get total device info", "err", err)
-		return nil, fmt.Errorf("failed to get total device info: %v", err)
+		return nil, fmt.Errorf("failed to get total device info: %w", err)
 	}
 
 	topologies, err := c.getTopologyByName(ctx)
 	if err != nil {
-		slog.Warn("failed to list topology", "err", err)
-		return nil, fmt.Errorf("failed to list topology: %v", err)
+		return nil, fmt.Errorf("failed to list topology: %w", err)
 	}
 
 	// Key by name, not UUID: getTotalInfo includes SR-IOV VFs, which share
@@ -126,6 +147,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 	}
 
 	merged := make([]DeviceInfo, 0, len(devices))
+	missing := make(map[string]bool)
 	for _, dev := range devices {
 		di := DeviceInfo{
 			UUID:       dev.GetUuid(),
@@ -152,18 +174,95 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			di.ErrStatus = int(info.GetErrStatus())
 			di.DevState = info.GetDevStatus()
 			di.PState = info.GetPState()
+		} else {
+			missing[dev.GetName()] = true
+			slog.Debug("Device missing from total info; telemetry zeroed", "device", dev.GetName())
 		}
 
 		di.SMCVersion, err = c.getSMCVersion(ctx, dev.GetName())
 		if err != nil {
-			slog.Warn("failed to get version", "device", dev.GetName(), "err", err)
-			return nil, fmt.Errorf("failed to get version for %s: %v", dev.GetName(), err)
+			return nil, fmt.Errorf("failed to get version for %s: %w", dev.GetName(), err)
 		}
 
 		merged = append(merged, di)
+		slog.Log(ctx, logging.LevelTrace, "Merged device",
+			"device", di.Name, "uuid", di.UUID, "state", di.DevState.String(),
+			"pstate", di.PState, "errStatus", di.ErrStatus)
 	}
 
+	slog.Debug("Merged device info", "devices", len(devices),
+		"totalInfos", len(totalInfos), "topologies", len(topologies), "merged", len(merged))
+	c.recordDeviceTransitions(merged, missing)
 	return merged, nil
+}
+
+// recordDeviceTransitions makes device-level failures diagnosable from
+// default-level logs while keeping steady state silent: every record here is
+// edge-triggered (fires once on a transition, never per cycle).
+func (c *Client) recordDeviceTransitions(merged []DeviceInfo, missing map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.collectedOnce {
+		c.collectedOnce = true
+		slog.Info("First collection succeeded", "endpoint", c.endpoint, "devices", len(merged))
+	}
+
+	serviceable := make(map[string]bool, len(merged))
+	for _, di := range merged {
+		serviceable[di.Name] = true
+	}
+
+	for name := range missing {
+		if !c.prevMissing[name] {
+			slog.Warn("Device missing from total info", "device", name,
+				"effect", "telemetry zeroed until device returns")
+		}
+	}
+	for name := range c.prevMissing {
+		if !missing[name] && serviceable[name] {
+			slog.Info("Device returned to total info", "device", name)
+		}
+	}
+
+	health := make(map[string]deviceHealth, len(merged))
+	for _, di := range merged {
+		if missing[di.Name] {
+			continue // the missing warn already covers this device
+		}
+		now := deviceHealth{state: di.DevState, errStatus: di.ErrStatus}
+		health[di.Name] = now
+		// The zero value of prev reads as healthy, so a device that is
+		// already sick on the first collection still gets its warn.
+		prev := c.prevHealth[di.Name]
+		if prev.degraded() == now.degraded() {
+			continue
+		}
+		if now.degraded() {
+			slog.Warn("Device entered degraded state", "device", di.Name,
+				"state", now.state.String(), "errStatus", now.errStatus)
+		} else {
+			slog.Info("Device recovered", "device", di.Name, "state", now.state.String())
+		}
+	}
+
+	// prevHealth and prevMissing are disjoint (a missing device is never in
+	// health), so a vanished device warns exactly once.
+	for name := range c.prevHealth {
+		if !serviceable[name] {
+			slog.Warn("Device no longer serviceable", "device", name,
+				"effect", "metrics for this device are no longer exported")
+		}
+	}
+	for name := range c.prevMissing {
+		if !serviceable[name] {
+			slog.Warn("Device no longer serviceable", "device", name,
+				"effect", "metrics for this device are no longer exported")
+		}
+	}
+
+	c.prevMissing = missing
+	c.prevHealth = health
 }
 
 func (c *Client) getTopologyByName(ctx context.Context) (map[string]*TopologyInfo, error) {
@@ -177,8 +276,8 @@ func (c *Client) getTopologyByName(ctx context.Context) (map[string]*TopologyInf
 		// A failed entry's zero values are indistinguishable from real
 		// readings (e.g. numa_node 0), so skip it entirely.
 		if entryErr := entry.GetError(); entryErr.GetCode() != 0 || entryErr.GetMessage() != "" {
-			slog.Debug("skipping topology entry with error",
-				"device", entry.GetDeviceName(), "code", entryErr.GetCode(), "message", entryErr.GetMessage())
+			slog.Debug("Skipping topology entry with error",
+				"device", entry.GetDeviceName(), "code", entryErr.GetCode(), "errMessage", entryErr.GetMessage())
 			continue
 		}
 		topologies[entry.GetDeviceName()] = &TopologyInfo{
@@ -198,7 +297,7 @@ func (c *Client) getSMCVersion(ctx context.Context, name string) (string, error)
 		return "", fmt.Errorf("failed to GetVersion RPC: %w", err)
 	}
 	if version.GetErrStatus() != rblnservicespb.Status_SUCCEED {
-		slog.Debug("daemon returned no version", "device", name)
+		slog.Debug("Daemon returned no version", "device", name)
 		return "", nil
 	}
 	return version.GetSmcVersion(), nil

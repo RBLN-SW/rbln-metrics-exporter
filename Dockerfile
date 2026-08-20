@@ -11,10 +11,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 
 ENV CGO_ENABLED=0
+ARG VERSION
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
+    go build -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
+    -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
 FROM redhat/ubi9-minimal:9.6
 ARG VERSION
@@ -44,8 +46,6 @@ RUN chown rbln:rbln /usr/local/bin/rbln-metrics-exporter && \
     chmod 755 /usr/local/bin/rbln-metrics-exporter
 
 USER rbln
-
-ENV RBLN_METRICS_EXPORTER_LOG_LEVEL=info
 
 EXPOSE 9090
 
