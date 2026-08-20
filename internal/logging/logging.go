@@ -68,6 +68,7 @@ func setupFromEnv(w io.Writer) {
 		return
 	}
 	slog.SetDefault(logger)
+	redirectGrpclog()
 	// With LOG_LEVEL=error and an invalid LOG_FORMAT, the format Warn is
 	// suppressed by the level gate — accepted, since the error gate was
 	// explicitly requested.

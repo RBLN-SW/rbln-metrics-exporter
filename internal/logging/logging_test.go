@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"google.golang.org/grpc/grpclog"
 )
 
 func logLine(t *testing.T, level, format, emit string) map[string]any {
@@ -240,6 +242,34 @@ func TestSetupFromEnvWarnsFallbackRecordOnInvalidFormat(t *testing.T) {
 	}
 	if _, ok := m["err"].(string); !ok {
 		t.Fatalf("err = %v, want string", m["err"])
+	}
+}
+
+func TestSetupRoutesGrpclogThroughSlog(t *testing.T) {
+	old := slog.Default()
+	defer slog.SetDefault(old)
+	t.Setenv("LOG_LEVEL", "info")
+	t.Setenv("LOG_FORMAT", "json")
+	var buf bytes.Buffer
+	setupFromEnv(&buf)
+
+	grpclog.Error("connection reset by peer")
+	grpclog.Warning("transport noise") // maps to debug, gated at info
+
+	recs := jsonLines(t, &buf)
+	if len(recs) != 1 {
+		t.Fatalf("got %d records, want 1 grpc error: %s", len(recs), buf.String())
+	}
+	m := recs[0]
+	if m["level"] != "error" || m["msg"] != "gRPC log" {
+		t.Fatalf("record = %v, want error-level gRPC record", m)
+	}
+	if m["severity"] != "error" {
+		t.Fatalf("severity = %v, want error", m["severity"])
+	}
+	detail, ok := m["detail"].(string)
+	if !ok || !strings.Contains(detail, "connection reset by peer") {
+		t.Fatalf("detail = %v, want the grpclog text", m["detail"])
 	}
 }
 
