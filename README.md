@@ -75,6 +75,10 @@ Flags:
 | `RBLN_METRICS_EXPORTER_KUBERNETES_MODE` | `auto` | Kubernetes integration: `auto`, `on`, or `off` |
 | `RBLN_METRICS_EXPORTER_ONESHOT` | `false` | When `true`, scrape once and exit |
 | `NODE_NAME` | auto-detected | Overrides the node label inserted into metrics |
+| `LOG_LEVEL` | `info` | Log level: `error`, `warning`, `info`, `debug`, or `trace` |
+| `LOG_FORMAT` | `json` | Log output format: `json` or `text` |
+
+> `LOG_LEVEL=warning` is emitted in logs as `"level":"warn"` (slog's canonical spelling) — write dashboard/alert filters against `warn`, not `warning`.
 
 
 ---
