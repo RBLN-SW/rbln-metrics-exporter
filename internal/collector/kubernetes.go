@@ -21,12 +21,18 @@ import (
 const (
 	PodResourceSocket  = "/var/lib/kubelet/pod-resources/kubelet.sock"
 	RBLNResourcePrefix = "rebellions.ai"
-	// A DRA driver name is a subdomain of the vendor domain
-	// ("npu.rebellions.ai") and so never matches RBLNResourcePrefix.
-	// Suffix-matched rather than compared because the driver's name is
-	// overridable via its DRIVER_NAME env var.
-	RBLNDRADriverSuffix = RBLNResourcePrefix
 )
+
+// isRBLNDRADriver reports whether a DRA driver name belongs to Rebellions. The
+// driver calls itself "npu.rebellions.ai" by default — a subdomain of the vendor
+// domain, and so never a match for RBLNResourcePrefix — but its DRIVER_NAME env
+// var can override that, which is why the vendor domain is matched as a domain
+// suffix rather than compared. An override that abandons the vendor domain
+// cannot be recognised here and its devices go unattributed.
+func isRBLNDRADriver(driverName string) bool {
+	return driverName == RBLNResourcePrefix ||
+		strings.HasSuffix(driverName, "."+RBLNResourcePrefix)
+}
 
 type DeviceName string
 
@@ -205,7 +211,7 @@ func deviceMapFromPodResources(podResources *podResourcesAPI.ListPodResourcesRes
 					// A DRA claim result carries no device name when it
 					// allocated something other than a device, which this
 					// exporter has no telemetry for.
-					if !strings.HasSuffix(claimResource.GetDriverName(), RBLNDRADriverSuffix) ||
+					if !isRBLNDRADriver(claimResource.GetDriverName()) ||
 						claimResource.GetDeviceName() == "" {
 						continue
 					}

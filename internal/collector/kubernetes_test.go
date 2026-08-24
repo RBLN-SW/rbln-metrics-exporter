@@ -172,6 +172,12 @@ func TestDeviceMapFromPodResources(t *testing.T) {
 			},
 		},
 		{
+			name: "driver whose name merely ends in the vendor domain is ignored",
+			resp: response(podResources("team-c", "lookalike-pod",
+				draContainer("worker", "lookalike-claim", "npu.notrebellions.ai", "rbln0"))),
+			want: map[DeviceName]PodResourceInfo{},
+		},
+		{
 			name: "device plugin and dra pods coexist on one node",
 			resp: response(
 				podResources("team-a", "dp-pod", devicePluginContainer("worker", dpResource, "rbln0")),
