@@ -104,12 +104,21 @@ func (p *PodResourceMapper) TriggerSync() {
 }
 
 func (p *PodResourceMapper) Snapshot() map[DeviceName]PodResourceInfo {
+	devices, _ := p.SharedSnapshot()
+	return devices
+}
+
+// SharedSnapshot returns the last sync's device map along with the devices that
+// sync found claimed by more than one pod. Both come from one critical section
+// so a caller cannot label a device from one sync and read its sharing state
+// from the next.
+func (p *PodResourceMapper) SharedSnapshot() (map[DeviceName]PodResourceInfo, []DeviceName) {
 	p.RLock()
 	defer p.RUnlock()
 
 	snapshot := make(map[DeviceName]PodResourceInfo, len(p.podResourcesByDevice))
 	maps.Copy(snapshot, p.podResourcesByDevice)
-	return snapshot
+	return snapshot, slices.Clone(p.sharedDevices)
 }
 
 func (p *PodResourceMapper) runSyncLoop(ctx context.Context) {
