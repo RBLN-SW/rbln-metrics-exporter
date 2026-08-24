@@ -21,7 +21,7 @@ The RBLN Metrics Exporter exposes detailed telemetry for RBLN NPUs in [Prometheu
 | RBLN Driver | `>= 1.3.40` |
 | RBLN Daemon | Installed alongside the driver to serve metrics over gRPC (`:50051` by default) |
 | Operating System | Linux kernel with access to `/sys`; when running on Kubernetes ensure `/var/lib/kubelet/pod-resources` is accessible |
-| Kubernetes (optional) | Any version for device-plugin allocations. For DRA allocations, `>= 1.34`, or `>= 1.27` with the kubelet feature gates below — see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
+| Kubernetes (optional) | Any version for device-plugin allocations. For DRA allocations, `>= 1.34` — see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
 | Prometheus | Any Prometheus-compatible scraper (Vanilla, Helm chart, or Prometheus Operator). The exporter can run without Prometheus at first, but you need a scraper to persist or visualize the metrics. |
 | Grafana (optional) | For dashboards that visualize the exported metrics |
 
@@ -159,17 +159,14 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 
 The exporter attributes devices to workloads through the kubelet pod-resources API, which reports device-plugin and DRA allocations in separate fields. Both are read, so a cluster running the device plugin and the DRA driver side by side gets Kubernetes labels on every device either of them allocated. No extra mount, RBAC, or configuration is needed.
 
-Reading DRA allocations requires two kubelet feature gates:
+DRA attribution requires **Kubernetes `>= 1.34`**, the same floor as the [DRA driver](https://github.com/RBLN-SW/rbln-k8s-dra-driver) itself. Both kubelet feature gates it depends on — `DynamicResourceAllocation` (GA) and `KubeletPodResourcesDynamicResources` (Beta) — are enabled by default there, so no kubelet flags are needed.
 
-| Gate | Kubernetes `>= 1.34` | Kubernetes 1.27 – 1.33 |
-| --- | --- | --- |
-| `DynamicResourceAllocation` | GA, enabled by default | Pass `--feature-gates=DynamicResourceAllocation=true` |
-| `KubeletPodResourcesDynamicResources` | Beta, enabled by default | Pass `--feature-gates=KubeletPodResourcesDynamicResources=true` |
+Older clusters are not a matter of turning those gates on. The pod-resources API gained the `driver_name` and `device_name` fields this exporter reads only in Kubernetes 1.31, so on 1.27 – 1.30 the gate can be enabled and every DRA device still goes unattributed. The DRA driver in turn targets the `resource.k8s.io/v1` API that reached GA in 1.34.
 
 A metric series carries one set of pod labels, but DRA lets one device have more than one claimant. The exporter therefore picks a single claimant per device, always the same one across scrapes so a device's series does not split:
 
 - **Containers of one pod sharing a claim** — `namespace` and `pod` stay correct and one of the container names is used. Reported at trace level only.
-- **Several pods sharing one `ResourceClaim`** — the other pods' metrics go unattributed, so the exporter logs a warning naming the affected devices, and an informational record once the sharing ends.
+- **Several pods sharing one `ResourceClaim`** — the other pods' metrics go unattributed. `rbln_npu_device_shared` reports `1` for those devices, so the partial attribution is visible to whoever is reading a dashboard rather than only to whoever is reading the logs. The exporter also logs a warning naming the affected devices, and an informational record once the sharing ends.
 
 ---
 
@@ -261,6 +258,7 @@ Two failure signals exist and mean different things:
 | `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
 | `rbln_npu_pcie_link_width` | Current PCIe link width | lanes |
 | `rbln_npu_device_info` | Device identity and static attributes as labels | always 1 |
+| `rbln_npu_device_shared` | 1 if several pods claim the device, so its pod labels name only one of them; Kubernetes mode only | 0/1 |
 | `rbln_up` | 1 if the last metrics collection from `rbln-smd` succeeded, 0 otherwise (local mode: the last scheduled collection cycle; gateway mode: the collection performed for this scrape) | 0/1 |
 
 ### Common Label Set
@@ -303,7 +301,8 @@ rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_versi
 | --- | --- | --- |
 | `rbln_up` is `0` and NPU metrics are absent | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
 | No Kubernetes labels | Pod-resources socket missing | Confirm `/var/lib/kubelet/pod-resources/kubelet.sock` is mounted and kubelet exposes the API |
-| No Kubernetes labels, DRA-allocated devices only | Kubelet is not reporting DRA allocations | Confirm the feature gates in [Dynamic Resource Allocation](#dynamic-resource-allocation-dra); run the exporter with `LOG_LEVEL=debug` and check the `Synced pod resources` record's device count |
+| No Kubernetes labels, DRA-allocated devices only | Kubelet is not reporting DRA allocations | Confirm the cluster is Kubernetes `>= 1.34` (see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra)); run the exporter with `LOG_LEVEL=debug` and check the `Synced pod resources` record's device count |
+| Pod labels name only one of several pods sharing a device | Those pods reference one `ResourceClaim` | Expected — a series holds one set of labels. `rbln_npu_device_shared` is `1` for those devices; see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
 | Scrape errors in Prometheus | Authorization/namespace mismatch | Ensure Service or ServiceMonitor selects the exporter pods and Prometheus is allowed to scrape the namespace |
 | Gateway returns HTTP 400 | Missing `?target=` parameter | Check the `relabel_configs` copy rules run before `__address__` is replaced |
 | `rbln_up 0` for one target | That host's `rbln-smd` unreachable from the gateway | Verify the daemon is running on the target and its gRPC port is reachable from the gateway host |
