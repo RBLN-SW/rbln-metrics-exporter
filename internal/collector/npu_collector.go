@@ -27,6 +27,12 @@ func NewNPUCollector(dClient *daemon.Client, registry prometheus.Registerer, isK
 		NewDeviceInfoMetric(podResourceMapper, nodeName, isKubernetes),
 	}
 
+	// Only DRA produces a device with several claimants, so outside Kubernetes
+	// the gauge would be a constant 0 on every device.
+	if isKubernetes {
+		metrics = append(metrics, NewSharedDeviceMetric(podResourceMapper, nodeName))
+	}
+
 	return &NPUCollector{
 		metrics:           metrics,
 		dClient:           dClient,
