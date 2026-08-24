@@ -20,9 +20,9 @@ limitations under the License.
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v4.23.4
-// source: staging/src/k8s.io/kubelet/pkg/apis/podresources/v1alpha1/api.proto
+// source: staging/src/k8s.io/kubelet/pkg/apis/podresources/v1/api.proto
 
-package v1alpha1
+package v1
 
 import (
 	context "context"
@@ -37,7 +37,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PodResourcesLister_List_FullMethodName = "/v1alpha1.PodResourcesLister/List"
+	PodResourcesLister_List_FullMethodName                    = "/v1.PodResourcesLister/List"
+	PodResourcesLister_GetAllocatableResources_FullMethodName = "/v1.PodResourcesLister/GetAllocatableResources"
+	PodResourcesLister_Get_FullMethodName                     = "/v1.PodResourcesLister/Get"
 )
 
 // PodResourcesListerClient is the client API for PodResourcesLister service.
@@ -48,6 +50,8 @@ const (
 // node resources consumed by pods and containers on the node
 type PodResourcesListerClient interface {
 	List(ctx context.Context, in *ListPodResourcesRequest, opts ...grpc.CallOption) (*ListPodResourcesResponse, error)
+	GetAllocatableResources(ctx context.Context, in *AllocatableResourcesRequest, opts ...grpc.CallOption) (*AllocatableResourcesResponse, error)
+	Get(ctx context.Context, in *GetPodResourcesRequest, opts ...grpc.CallOption) (*GetPodResourcesResponse, error)
 }
 
 type podResourcesListerClient struct {
@@ -68,6 +72,26 @@ func (c *podResourcesListerClient) List(ctx context.Context, in *ListPodResource
 	return out, nil
 }
 
+func (c *podResourcesListerClient) GetAllocatableResources(ctx context.Context, in *AllocatableResourcesRequest, opts ...grpc.CallOption) (*AllocatableResourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AllocatableResourcesResponse)
+	err := c.cc.Invoke(ctx, PodResourcesLister_GetAllocatableResources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podResourcesListerClient) Get(ctx context.Context, in *GetPodResourcesRequest, opts ...grpc.CallOption) (*GetPodResourcesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPodResourcesResponse)
+	err := c.cc.Invoke(ctx, PodResourcesLister_Get_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodResourcesListerServer is the server API for PodResourcesLister service.
 // All implementations must embed UnimplementedPodResourcesListerServer
 // for forward compatibility.
@@ -76,6 +100,8 @@ func (c *podResourcesListerClient) List(ctx context.Context, in *ListPodResource
 // node resources consumed by pods and containers on the node
 type PodResourcesListerServer interface {
 	List(context.Context, *ListPodResourcesRequest) (*ListPodResourcesResponse, error)
+	GetAllocatableResources(context.Context, *AllocatableResourcesRequest) (*AllocatableResourcesResponse, error)
+	Get(context.Context, *GetPodResourcesRequest) (*GetPodResourcesResponse, error)
 	mustEmbedUnimplementedPodResourcesListerServer()
 }
 
@@ -88,6 +114,12 @@ type UnimplementedPodResourcesListerServer struct{}
 
 func (UnimplementedPodResourcesListerServer) List(context.Context, *ListPodResourcesRequest) (*ListPodResourcesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedPodResourcesListerServer) GetAllocatableResources(context.Context, *AllocatableResourcesRequest) (*AllocatableResourcesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAllocatableResources not implemented")
+}
+func (UnimplementedPodResourcesListerServer) Get(context.Context, *GetPodResourcesRequest) (*GetPodResourcesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
 }
 func (UnimplementedPodResourcesListerServer) mustEmbedUnimplementedPodResourcesListerServer() {}
 func (UnimplementedPodResourcesListerServer) testEmbeddedByValue()                            {}
@@ -128,18 +160,62 @@ func _PodResourcesLister_List_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodResourcesLister_GetAllocatableResources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AllocatableResourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodResourcesListerServer).GetAllocatableResources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodResourcesLister_GetAllocatableResources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodResourcesListerServer).GetAllocatableResources(ctx, req.(*AllocatableResourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodResourcesLister_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPodResourcesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodResourcesListerServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodResourcesLister_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodResourcesListerServer).Get(ctx, req.(*GetPodResourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodResourcesLister_ServiceDesc is the grpc.ServiceDesc for PodResourcesLister service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var PodResourcesLister_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "v1alpha1.PodResourcesLister",
+	ServiceName: "v1.PodResourcesLister",
 	HandlerType: (*PodResourcesListerServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "List",
 			Handler:    _PodResourcesLister_List_Handler,
 		},
+		{
+			MethodName: "GetAllocatableResources",
+			Handler:    _PodResourcesLister_GetAllocatableResources_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _PodResourcesLister_Get_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "staging/src/k8s.io/kubelet/pkg/apis/podresources/v1alpha1/api.proto",
+	Metadata: "staging/src/k8s.io/kubelet/pkg/apis/podresources/v1/api.proto",
 }
