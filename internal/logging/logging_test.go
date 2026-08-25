@@ -185,8 +185,8 @@ func jsonLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 func TestSetupFromEnvFallsBack(t *testing.T) {
 	old := slog.Default()
 	defer slog.SetDefault(old)
-	t.Setenv("LOG_LEVEL", "bogus")
-	t.Setenv("LOG_FORMAT", "json")
+	t.Setenv(envLogLevel, "bogus")
+	t.Setenv(envLogFormat, "json")
 	var buf bytes.Buffer
 	setupFromEnv(&buf)
 	ctx := context.Background()
@@ -201,8 +201,8 @@ func TestSetupFromEnvFallsBack(t *testing.T) {
 func TestSetupFromEnvWarnsFallbackRecordOnInvalidLevel(t *testing.T) {
 	old := slog.Default()
 	defer slog.SetDefault(old)
-	t.Setenv("LOG_LEVEL", "bogus")
-	t.Setenv("LOG_FORMAT", "json")
+	t.Setenv(envLogLevel, "bogus")
+	t.Setenv(envLogFormat, "json")
 	var buf bytes.Buffer
 	setupFromEnv(&buf)
 	recs := jsonLines(t, &buf)
@@ -210,8 +210,8 @@ func TestSetupFromEnvWarnsFallbackRecordOnInvalidLevel(t *testing.T) {
 		t.Fatalf("got %d records, want 1 fallback warn: %s", len(recs), buf.String())
 	}
 	m := recs[0]
-	if m["level"] != "warn" || m["msg"] != "Invalid LOG_LEVEL, using default" {
-		t.Fatalf("record = %v, want LOG_LEVEL fallback warn", m)
+	if m["level"] != "warn" || m["msg"] != "Invalid "+envLogLevel+", using default" {
+		t.Fatalf("record = %v, want %s fallback warn", m, envLogLevel)
 	}
 	if m["fallback"] != "info" {
 		t.Fatalf("fallback = %v, want info", m["fallback"])
@@ -225,8 +225,8 @@ func TestSetupFromEnvWarnsFallbackRecordOnInvalidLevel(t *testing.T) {
 func TestSetupFromEnvWarnsFallbackRecordOnInvalidFormat(t *testing.T) {
 	old := slog.Default()
 	defer slog.SetDefault(old)
-	t.Setenv("LOG_LEVEL", "info")
-	t.Setenv("LOG_FORMAT", "xml")
+	t.Setenv(envLogLevel, "info")
+	t.Setenv(envLogFormat, "xml")
 	var buf bytes.Buffer
 	setupFromEnv(&buf)
 	recs := jsonLines(t, &buf)
@@ -234,8 +234,8 @@ func TestSetupFromEnvWarnsFallbackRecordOnInvalidFormat(t *testing.T) {
 		t.Fatalf("got %d records, want 1 fallback warn: %s", len(recs), buf.String())
 	}
 	m := recs[0]
-	if m["level"] != "warn" || m["msg"] != "Invalid LOG_FORMAT, using default" {
-		t.Fatalf("record = %v, want LOG_FORMAT fallback warn", m)
+	if m["level"] != "warn" || m["msg"] != "Invalid "+envLogFormat+", using default" {
+		t.Fatalf("record = %v, want %s fallback warn", m, envLogFormat)
 	}
 	if m["fallback"] != "json" {
 		t.Fatalf("fallback = %v, want json", m["fallback"])
@@ -248,8 +248,8 @@ func TestSetupFromEnvWarnsFallbackRecordOnInvalidFormat(t *testing.T) {
 func TestSetupRoutesGrpclogThroughSlog(t *testing.T) {
 	old := slog.Default()
 	defer slog.SetDefault(old)
-	t.Setenv("LOG_LEVEL", "info")
-	t.Setenv("LOG_FORMAT", "json")
+	t.Setenv(envLogLevel, "info")
+	t.Setenv(envLogFormat, "json")
 	var buf bytes.Buffer
 	setupFromEnv(&buf)
 

@@ -76,10 +76,10 @@ Flags:
 | `RBLN_METRICS_EXPORTER_KUBERNETES_MODE` | `auto` | Kubernetes integration: `auto`, `on`, or `off` |
 | `RBLN_METRICS_EXPORTER_ONESHOT` | `false` | When `true`, scrape once and exit |
 | `NODE_NAME` | auto-detected | Overrides the node label inserted into metrics |
-| `LOG_LEVEL` | `info` | Log level: `error`, `warning`, `info`, `debug`, or `trace` |
-| `LOG_FORMAT` | `json` | Log output format: `json` or `text` |
+| `RBLN_METRICS_EXPORTER_LOG_LEVEL` | `info` | Log level: `error`, `warning`, `info`, `debug`, or `trace` |
+| `RBLN_METRICS_EXPORTER_LOG_FORMAT` | `json` | Log output format: `json` or `text` |
 
-> `LOG_LEVEL=warning` is emitted in logs as `"level":"warn"` (slog's canonical spelling) — write dashboard/alert filters against `warn`, not `warning`.
+> `RBLN_METRICS_EXPORTER_LOG_LEVEL=warning` is emitted in logs as `"level":"warn"` (slog's canonical spelling) — write dashboard/alert filters against `warn`, not `warning`.
 
 > **For log pipelines:** records are single-line JSON (NDJSON) on **stdout**. The timestamp key is `ts` in RFC3339Nano with variable fractional digits — set Fluent Bit's JSON parser to `Time_Key ts`; promtail's `RFC3339Nano` format works as-is. The message key is `msg`, the error key is `err`, and `caller` (`pkg/file.go:N`) appears only at `debug`/`trace`. Keep `json` in-cluster; `text` is meant for local debugging.
 
@@ -301,7 +301,7 @@ rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_versi
 | --- | --- | --- |
 | `rbln_up` is `0` and NPU metrics are absent | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
 | No Kubernetes labels | Pod-resources socket missing | Confirm `/var/lib/kubelet/pod-resources/kubelet.sock` is mounted and kubelet exposes the API |
-| No Kubernetes labels, DRA-allocated devices only | Kubelet is not reporting DRA allocations | Confirm the cluster is Kubernetes `>= 1.34` (see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra)); run the exporter with `LOG_LEVEL=debug` and check the `Synced pod resources` record's device count |
+| No Kubernetes labels, DRA-allocated devices only | Kubelet is not reporting DRA allocations | Confirm the cluster is Kubernetes `>= 1.34` (see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra)); run the exporter with `RBLN_METRICS_EXPORTER_LOG_LEVEL=debug` and check the `Synced pod resources` record's device count |
 | Pod labels name only one of several pods sharing a device | Those pods reference one `ResourceClaim` | Expected — a series holds one set of labels. `rbln_npu_device_shared` is `1` for those devices; see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
 | Scrape errors in Prometheus | Authorization/namespace mismatch | Ensure Service or ServiceMonitor selects the exporter pods and Prometheus is allowed to scrape the namespace |
 | Gateway returns HTTP 400 | Missing `?target=` parameter | Check the `relabel_configs` copy rules run before `__address__` is replaced |

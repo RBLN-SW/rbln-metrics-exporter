@@ -1,6 +1,6 @@
 // Package logging configures the process-wide slog logger: structured json
-// or text records controlled by LOG_LEVEL and LOG_FORMAT, defaulting to
-// info/json.
+// or text records controlled by RBLN_METRICS_EXPORTER_LOG_LEVEL and
+// RBLN_METRICS_EXPORTER_LOG_FORMAT, defaulting to info/json.
 package logging
 
 import (
@@ -10,6 +10,13 @@ import (
 	"os"
 	"strings"
 	"time"
+)
+
+// Env vars follow the project-wide RBLN_METRICS_EXPORTER_* prefix so
+// generic names cannot be captured by unrelated env injection.
+const (
+	envLogLevel  = "RBLN_METRICS_EXPORTER_LOG_LEVEL"
+	envLogFormat = "RBLN_METRICS_EXPORTER_LOG_FORMAT"
 )
 
 // LevelTrace extends slog's levels downward with a "trace" level below debug.
@@ -43,7 +50,8 @@ func New(w io.Writer, level, format string) (*slog.Logger, error) {
 	return slog.New(h), nil
 }
 
-// SetupFromEnv reads LOG_LEVEL / LOG_FORMAT and installs the logger.
+// SetupFromEnv reads RBLN_METRICS_EXPORTER_LOG_LEVEL / _LOG_FORMAT and
+// installs the logger.
 // Empty values mean info/json (production defaults). Invalid values do not
 // kill the process — a typo in a DaemonSet env would CrashLoopBackOff the
 // exporter and drop all telemetry from the node. Instead, only the offending
@@ -53,7 +61,7 @@ func SetupFromEnv() {
 }
 
 func setupFromEnv(w io.Writer) {
-	level, format := os.Getenv("LOG_LEVEL"), os.Getenv("LOG_FORMAT")
+	level, format := os.Getenv(envLogLevel), os.Getenv(envLogFormat)
 	var levelErr, formatErr error
 	if _, err := parseLevel(level); err != nil {
 		levelErr, level = err, "info"
@@ -69,14 +77,14 @@ func setupFromEnv(w io.Writer) {
 	}
 	slog.SetDefault(logger)
 	redirectGrpclog()
-	// With LOG_LEVEL=error and an invalid LOG_FORMAT, the format Warn is
-	// suppressed by the level gate — accepted, since the error gate was
-	// explicitly requested.
+	// With the level env set to error and an invalid format env, the format
+	// Warn is suppressed by the level gate — accepted, since the error gate
+	// was explicitly requested.
 	if levelErr != nil {
-		slog.Warn("Invalid LOG_LEVEL, using default", "err", levelErr, "fallback", "info")
+		slog.Warn("Invalid "+envLogLevel+", using default", "err", levelErr, "fallback", "info")
 	}
 	if formatErr != nil {
-		slog.Warn("Invalid LOG_FORMAT, using default", "err", formatErr, "fallback", "json")
+		slog.Warn("Invalid "+envLogFormat+", using default", "err", formatErr, "fallback", "json")
 	}
 }
 

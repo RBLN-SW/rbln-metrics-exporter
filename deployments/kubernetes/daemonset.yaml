@@ -47,9 +47,9 @@ spec:
             - name: RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL
               value: "$(NODE_IP):50051"
             # Uncomment to override the logging defaults (info level, json format)
-            # - name: LOG_LEVEL
+            # - name: RBLN_METRICS_EXPORTER_LOG_LEVEL
             #   value: "debug"
-            # - name: LOG_FORMAT
+            # - name: RBLN_METRICS_EXPORTER_LOG_FORMAT
             #   value: "json"
           volumeMounts:
             - name: pod-resources
