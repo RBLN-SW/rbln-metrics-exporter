@@ -1,0 +1,166 @@
+name: Container Image Scan
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-findings:
+        description: "Fail the job when fixable HIGH/CRITICAL findings are present"
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      critical:
+        description: "Number of fixable CRITICAL vulnerabilities"
+        value: ${{ jobs.scan.outputs.critical }}
+      high:
+        description: "Number of fixable HIGH vulnerabilities"
+        value: ${{ jobs.scan.outputs.high }}
+      secrets:
+        description: "Number of HIGH/CRITICAL secrets baked into the image"
+        value: ${{ jobs.scan.outputs.secrets }}
+      total:
+        description: "Sum of the counts above"
+        value: ${{ jobs.scan.outputs.total }}
+
+# Permissions are inherited from the calling workflow on purpose. Declaring
+# `security-events: write` here would make the call fail outright on fork PRs,
+# where the token is read-only; instead the SARIF upload step below is skipped.
+
+jobs:
+  scan:
+    name: Build and scan image
+    runs-on: ubuntu-latest
+    outputs:
+      critical: ${{ steps.summarize.outputs.critical }}
+      high: ${{ steps.summarize.outputs.high }}
+      secrets: ${{ steps.summarize.outputs.secrets }}
+      total: ${{ steps.summarize.outputs.total }}
+    env:
+      # Local-only tag. Using the published name here would let Trivy silently pull
+      # and scan the real registry image if the local build were missing.
+      IMAGE_REF: local/rbln-metrics-exporter:ci-${{ github.sha }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # Skipped on fork PRs, where secrets are not available.
+      - name: Login to Docker Hub for base-image pulls
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        env:
+          REGISTRY: local
+          VERSION: ci-${{ github.sha }}
+          PUSH_ON_BUILD: "false"
+          BUILD_MULTI_PLATFORM: "false"
+        run: make build-image
+
+      - name: Read Trivy version
+        id: trivy-version
+        run: echo "version=$(grep '^TRIVY_VERSION' versions.mk | cut -d'=' -f2 | tr -d ' ?')" >> "$GITHUB_OUTPUT"
+
+      # Scan once at every severity; the JSON is the single source of truth that the
+      # SARIF upload, the job summary and the gate are all derived from. The action
+      # also puts the trivy binary on PATH for the conversion step below.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: ${{ steps.trivy-version.outputs.version }}
+          scan-type: image
+          image-ref: ${{ env.IMAGE_REF }}
+          scanners: vuln,secret
+          format: json
+          output: trivy-results.json
+          trivyignores: .trivyignore.yaml
+
+      - name: Convert results to SARIF
+        run: trivy convert --format sarif --output trivy-results.sarif trivy-results.json
+
+      # Fork PRs are not granted `security-events: write`; skip rather than fail them.
+      - name: Upload SARIF to code scanning
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      # The gate count and the rendered summary come from one filter, so they can
+      # never disagree. `trivy convert --format table` is not used here because it
+      # has no --ignore-unfixed flag.
+      - name: Summarize findings
+        id: summarize
+        run: |
+          jq '[.Results[]?.Vulnerabilities[]?
+              | select(.Severity == "HIGH" or .Severity == "CRITICAL")
+              | select((.FixedVersion // "") != "")]
+            | unique_by([.VulnerabilityID, .PkgName])
+            | sort_by(if .Severity == "CRITICAL" then 0 else 1 end, .VulnerabilityID)' \
+            trivy-results.json > fixable.json
+          jq '[.Results[]?.Secrets[]?
+            | select(.Severity == "HIGH" or .Severity == "CRITICAL")]' trivy-results.json > secrets.json
+
+          critical=$(jq '[.[] | select(.Severity == "CRITICAL")] | length' fixable.json)
+          high=$(jq '[.[] | select(.Severity == "HIGH")] | length' fixable.json)
+          secrets=$(jq 'length' secrets.json)
+          total=$((critical + high + secrets))
+
+          {
+            echo "critical=${critical}"
+            echo "high=${high}"
+            echo "secrets=${secrets}"
+            echo "total=${total}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Trivy image scan"
+            echo
+            echo "Image: \`${IMAGE_REF}\`"
+            echo
+            echo "Fixable **${critical} CRITICAL**, **${high} HIGH**; **${secrets}** secret(s)."
+            echo
+            if [ "$critical" -gt 0 ] || [ "$high" -gt 0 ]; then
+              echo "| Severity | CVE | Package | Installed | Fixed |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r '.[] | "| \(.Severity) | [\(.VulnerabilityID)](\(.PrimaryURL // "")) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) |"' fixable.json
+              echo
+            fi
+            if [ "$secrets" -gt 0 ]; then
+              echo "| Secret | Target |"
+              echo "| --- | --- |"
+              jq -r '.[] | "| \(.RuleID) | \(.Title) |"' secrets.json
+              echo
+            fi
+            if [ "$total" -eq 0 ]; then
+              echo "No fixable HIGH/CRITICAL findings."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: |
+            trivy-results.json
+            trivy-results.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail on findings
+        if: ${{ inputs.fail-on-findings && steps.summarize.outputs.total != '0' }}
+        env:
+          CRITICAL: ${{ steps.summarize.outputs.critical }}
+          HIGH: ${{ steps.summarize.outputs.high }}
+          SECRETS: ${{ steps.summarize.outputs.secrets }}
+        run: |
+          echo "::error::Image scan failed: ${CRITICAL} fixable CRITICAL, ${HIGH} fixable HIGH, ${SECRETS} secret(s). See the job summary for details."
+          echo "Fix by upgrading the affected package, or record a justified exception with an expiry date in .trivyignore.yaml."
+          exit 1

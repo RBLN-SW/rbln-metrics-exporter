@@ -1,4 +1,5 @@
-FROM golang:1.24-alpine AS builder
+ARG GOLANG_VERSION=1.26.7
+FROM golang:${GOLANG_VERSION}-alpine AS builder
 RUN apk add --no-cache build-base git
 
 WORKDIR /src
@@ -18,7 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
     -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
-FROM redhat/ubi9-minimal:9.6
+FROM redhat/ubi9-minimal:9.8
 ARG VERSION
 
 RUN microdnf install -y shadow-utils && \

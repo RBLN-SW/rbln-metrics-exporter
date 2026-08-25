@@ -1,0 +1,11 @@
+# Trivy vulnerability exceptions.
+#
+# Every entry MUST carry a `statement` explaining why it is not actionable and an
+# `expired_at` date, so exceptions get re-reviewed instead of living forever.
+#
+# vulnerabilities:
+#   - id: CVE-2026-00000
+#     statement: "Not reachable from this binary; upstream ubi9 fix pending."
+#     expired_at: 2026-12-31
+
+vulnerabilities: []
