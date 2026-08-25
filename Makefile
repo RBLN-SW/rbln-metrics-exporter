@@ -134,6 +134,15 @@ build-image: # Build the RBLN metrics exporter image
 		--build-arg GOLANG_VERSION="$(GOLANG_VERSION)" \
 		--file $(DOCKERFILE) $(CURDIR)
 
+.PHONY: scan-image
+scan-image: build-image # Scan the built image for fixable HIGH/CRITICAL vulnerabilities
+	@command -v trivy >/dev/null || { \
+		echo "trivy not found: https://trivy.dev/latest/getting-started/installation/"; \
+		exit 1; \
+	}
+	trivy image --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+		--ignorefile $(CURDIR)/.trivyignore.yaml --exit-code 1 $(IMAGE)
+
 .PHONY: ensure-golangci-lint
 ensure-golangci-lint:
 	@echo "Ensuring golangci-lint is installed..."

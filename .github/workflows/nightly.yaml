@@ -1,0 +1,145 @@
+name: Nightly Security Scan
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 03:00 KST
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # Rebuilds main from scratch so base-image drift shows up as new findings.
+  scan:
+    uses: ./.github/workflows/image-scan.yaml
+    secrets: inherit
+    with:
+      fail-on-findings: false # keep outputs available for the notify job
+
+  # Posts on every run, including clean ones, so the message doubles as a heartbeat:
+  # silence means the nightly stopped running, not that the image is healthy.
+  notify:
+    name: Notify Slack
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      # Same channel and override pattern as .buildkite/nightly-proto-sync.yml.
+      SLACK_CHANNEL_ID: ${{ vars.SLACK_CHANNEL_ID || 'C09NQQGNVTJ' }}
+    steps:
+      # Fails with the secret name rather than a bare `not_authed` from Slack.
+      - name: Check Slack token is configured
+        env:
+          SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}
+        run: |
+          [ -n "$SLACK_OAUTH_TOKEN" ] || {
+            echo "::error::Repository secret SLACK_OAUTH_TOKEN is not set."
+            exit 1
+          }
+
+      - name: Download scan results
+        continue-on-error: true # the scan job may have failed before producing them
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-results
+
+      - name: Build Slack payload
+        env:
+          SCAN_RESULT: ${{ needs.scan.result }}
+          CRITICAL: ${{ needs.scan.outputs.critical }}
+          HIGH: ${{ needs.scan.outputs.high }}
+          SECRETS: ${{ needs.scan.outputs.secrets }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          SECURITY_URL: ${{ github.server_url }}/${{ github.repository }}/security/code-scanning
+        # Message shape follows .buildkite/lib/proto-diff-check.py: coloured attachment,
+        # "<emoji> *<product> <link|#run>*" title, status, divider, context, detail.
+        run: |
+          product="Metrics Exporter Image Scan"
+
+          if [ "$SCAN_RESULT" != "success" ]; then
+            emoji=":rotating_light:"; color="#FF0000"
+            fallback="${product}: scan did not complete"
+            status="Scan did not complete (\`${SCAN_RESULT}\`)"
+            details="The scan job failed before producing results."
+          elif [ "$(( ${CRITICAL:-0} + ${HIGH:-0} + ${SECRETS:-0} ))" -eq 0 ]; then
+            emoji=":white_check_mark:"; color="#36a64f"
+            fallback="${product}: no findings"
+            status="No fixable HIGH/CRITICAL findings"
+            details="_Image is clean._"
+          else
+            emoji=":rotating_light:"; color="#FF0000"
+            fallback="${product}: ${CRITICAL} critical, ${HIGH} high"
+            status="Fixable *${CRITICAL} CRITICAL*, *${HIGH} HIGH*; *${SECRETS}* secret(s)"
+            details=$(jq -r '
+              [.Results[]?.Vulnerabilities[]?
+                | select(.Severity == "HIGH" or .Severity == "CRITICAL")
+                | select((.FixedVersion // "") != "")]
+              | unique_by([.VulnerabilityID, .PkgName])
+              | sort_by(if .Severity == "CRITICAL" then 0 else 1 end, .VulnerabilityID)
+              | .[:15]
+              | map("• *\(.Severity)* `\(.VulnerabilityID)` \(.PkgName) \(.InstalledVersion) → \(.FixedVersion)")
+              | join("\n")' trivy-results.json)
+            [ -n "$details" ] || details="_No fixable HIGH/CRITICAL findings._"
+          fi
+          title="${emoji} *${product} <${RUN_URL}|#${RUN_NUMBER}>*"
+
+          jq -n \
+            --arg channel "$SLACK_CHANNEL_ID" \
+            --arg fallback "$fallback" \
+            --arg color "$color" \
+            --arg title "$title" \
+            --arg status "$status" \
+            --arg details "$details" \
+            --arg context "\`${REPO}\` @ \`${SHA}\` · <${SECURITY_URL}|security tab>" \
+            '{
+              channel: $channel,
+              attachments: [{
+                fallback: $fallback,
+                color: $color,
+                blocks: [
+                  {type: "section", text: {type: "mrkdwn", text: $title}},
+                  {type: "section", text: {type: "mrkdwn", text: $status}},
+                  {type: "divider"},
+                  {type: "context", elements: [{type: "mrkdwn", text: $context}]},
+                  {type: "section", text: {type: "mrkdwn", text: $details[0:2900]}}
+                ]
+              }]
+            }' > slack-payload.json
+
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v4.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_OAUTH_TOKEN }}
+          errors: true # surface a bad token/channel instead of silently passing
+          payload-file-path: ./slack-payload.json
+
+  # The scan job is deliberately non-failing so `notify` can run; this job carries
+  # the real pass/fail signal for the nightly run.
+  report-status:
+    name: Report scan status
+    needs: [scan, notify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          SCAN_RESULT: ${{ needs.scan.result }}
+          TOTAL: ${{ needs.scan.outputs.total }}
+        run: |
+          if [ "$SCAN_RESULT" != "success" ]; then
+            echo "::error::Nightly scan job did not succeed (${SCAN_RESULT})"
+            exit 1
+          fi
+          if [ "$TOTAL" != "0" ]; then
+            echo "::error::${TOTAL} fixable HIGH/CRITICAL finding(s) in the nightly image scan"
+            exit 1
+          fi
+          echo "No fixable HIGH/CRITICAL findings."

@@ -13,6 +13,7 @@ permissions:
   contents: read
   pull-requests: write
   statuses: write
+  security-events: write # image-scan.yaml uploads SARIF to code scanning
 
 jobs:
   pr-title-validation:
@@ -46,21 +47,9 @@ jobs:
   go-build:
     needs: pr-title-validation
     uses: ./.github/workflows/go-build.yaml
-  build-image:
+  image-scan:
     needs: [code-check, go-build]
-    name: Build RBLN metrics exporter image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build image
-        env:
-          VERSION: "latest"
-          REGISTRY: docker.io/rebellions
-          PUSH_ON_BUILD: "false"
-          BUILD_MULTI_PLATFORM: "false" # TODO(mskim): revert when dedicated ARM runners become available
-        run: make build-image
+    uses: ./.github/workflows/image-scan.yaml
+    secrets: inherit
+    with:
+      fail-on-findings: true
