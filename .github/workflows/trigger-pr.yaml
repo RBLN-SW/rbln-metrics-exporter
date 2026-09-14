@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+      # Backport PRs need the same required checks as main PRs. The obedients PR
+      # pipeline's branch filter must include release-* as well (obedients-side setting).
+      - "release-*"
 
 concurrency:
   group: ${{ github.workflow }}
