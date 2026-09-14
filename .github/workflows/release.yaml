@@ -1,4 +1,8 @@
-name: Release Draft Pipeline
+name: release
+
+# Publish from a version tag: vX.Y.Z-rcN -> Harbor, vX.Y.Z -> docker.io by
+# digest. Tags are created by cut-release / tag-release only.
+# Everything else lives in the release kit: https://github.com/RBLN-SW/cloud-component-release-kit
 
 on:
   push:
@@ -7,181 +11,97 @@ on:
 
 permissions:
   contents: write
+  issues: write # GA deletes the "backport release-X.Y.Z" label
+  statuses: write # rc-validate-wait posts the rc-validation status; GA reads it
 
 jobs:
-  build-amd64:
-    name: Build and push amd64 image
-    runs-on: ubuntu-latest
+  release:
+    uses: RBLN-SW/cloud-component-release-kit/.github/workflows/release.yaml@v1
+    with:
+      # Image names under the registry (HARBOR_REGISTRY / DOCKERHUB_REGISTRY),
+      # space separated.
+      images: rbln-metrics-exporter
+      # Prefix of the GitHub release title.
+      release_name: RBLN Metrics Exporter
+    secrets: inherit
+
+  # Hand the rc to the obedients install scenario (.buildkite/pipeline.yml in
+  # release mode) once the kit has published it, then wait for the verdict and
+  # record it as the `rc-validation` commit status the kit reads before GA
+  # (enforced once CLOUD_COMPONENT_RC_VALIDATION_ENFORCE is "true"). obedients
+  # reports the build only as its "[Metrics Exporter] PR CI" status, so the
+  # verdict is polled from there. Do not mirror it from a `status` event
+  # workflow: obedients re-posts its status whenever another status lands on
+  # the commit, which turns any event-driven mirror into a loop (313 round
+  # trips on the DRA driver's v0.2.0-rc2).
+  rc-validate:
+    name: rc validation · trigger obedients
+    needs: release
+    if: needs.release.outputs.kind == 'rc'
+    # obedients is reachable only from the in-network runner.
+    runs-on: rbln-sw-k8s-general
+    outputs:
+      build_url: ${{ steps.trigger.outputs.build_url }}
+      triggered_at: ${{ steps.trigger.outputs.triggered_at }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Build and push amd64 image
+      - name: Install jq
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+      - name: Trigger the validation build
+        id: trigger
         env:
-          VERSION: ${{ github.ref_name }}-amd64
-          REGISTRY: docker.io/rebellions
-          PUSH_ON_BUILD: "true"
-          PLATFORM: linux/amd64
-        run: make build-image
-
-  build-arm64:
-    name: Build and push arm64 image
-    runs-on: ubuntu-22.04-rbln-arm
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-      - name: Install prerequisites
+          # Webhook trigger of the PR pipeline; the URL is the credential, so it
+          # lives in a secret. obedients applies the body's commit/branch/env.
+          TRIGGER_URL: ${{ secrets.OBEDIENTS_VALIDATE_TRIGGER_URL }}
+          SHA: ${{ needs.release.outputs.sha }}
+          BRANCH: ${{ needs.release.outputs.branch }}
         run: |
-          if ! command -v docker &>/dev/null; then
-            curl -fsSL https://get.docker.com | sudo sh
-            sudo usermod -aG docker "$USER"
-            sudo chmod 666 /var/run/docker.sock
+          set -euo pipefail
+          if [ -z "$TRIGGER_URL" ]; then
+            echo "::notice::secret OBEDIENTS_VALIDATE_TRIGGER_URL is not set; skipping rc validation, no rc-validation status will be posted for $GITHUB_REF_NAME"
+            exit 0
           fi
-          if ! command -v make &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y make
-          fi
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Build and push arm64 image
-        env:
-          VERSION: ${{ github.ref_name }}-arm64
-          REGISTRY: docker.io/rebellions
-          PUSH_ON_BUILD: "true"
-          PLATFORM: linux/arm64
-        run: make build-image
+          triggered_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          jq -n --arg sha "$SHA" --arg branch "$BRANCH" --arg tag "$GITHUB_REF_NAME" '{
+            commit: $sha, branch: $branch, message: ("rc-validation " + $tag),
+            env: { RELEASE_MODE: "true", EXPORTER_IMAGE_TAG: $tag }
+          }' | curl -sSf -X POST -H 'Content-Type: application/json' -d @- "$TRIGGER_URL" > build.json
+          url=$(jq -r '.build.web_url // .web_url // ("build #" + ((.build.number // .number) | tostring))' build.json)
+          echo "rc-validation build for $GITHUB_REF_NAME: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "build_url=$url"; echo "triggered_at=$triggered_at"; } >> "$GITHUB_OUTPUT"
 
-  manifest:
-    name: Create multi-arch manifest
-    needs: [build-amd64, build-arm64]
+  rc-validate-wait:
+    name: rc validation · verdict -> rc-validation status
+    needs: [release, rc-validate]
+    if: needs.rc-validate.outputs.build_url != ''
+    # GitHub API only; no obedients access needed here.
     runs-on: ubuntu-latest
-    env:
-      IMAGE: docker.io/rebellions/rbln-metrics-exporter
+    timeout-minutes: 180
     steps:
-      - name: Set up Docker buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Create version and latest manifests
-        run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE}:${{ github.ref_name }}" \
-            "${IMAGE}:${{ github.ref_name }}-amd64" \
-            "${IMAGE}:${{ github.ref_name }}-arm64"
-          docker buildx imagetools create \
-            --tag "${IMAGE}:latest" \
-            "${IMAGE}:${{ github.ref_name }}-amd64" \
-            "${IMAGE}:${{ github.ref_name }}-arm64"
-
-  draft-release:
-    needs:
-      - manifest
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get previous tag
-        id: prev
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
-          echo "previous_tag=$PREV_TAG" >> $GITHUB_ENV
-          echo "Previous tag: $PREV_TAG"
-
-      - name: Generate release notes
-        run: |
-          CURRENT_TAG=${GITHUB_REF_NAME}
-          PREV_TAG=${previous_tag:-}
-
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="$PREV_TAG..$CURRENT_TAG"
-          else
-            RANGE="$CURRENT_TAG"
-          fi
-
-          git log $RANGE --pretty=format:"%s" > commits.txt
-
-          FEATS=$(grep -E "^feat" commits.txt || true)
-          FIXES=$(grep -E "^fix" commits.txt || true)
-          DOCS=$(grep -E "^docs" commits.txt || true)
-          REFACTORS=$(grep -E "^refactor" commits.txt || true)
-          PERFS=$(grep -E "^perf" commits.txt || true)
-          STYLES=$(grep -E "^style" commits.txt || true)
-          BUILDS=$(grep -E "^build" commits.txt || true)
-          CHORES=$(grep -E "^chore" commits.txt || true)
-          TESTS=$(grep -E "^test" commits.txt || true)
-
-          {
-            echo "# Release Notes"
-            echo
-            echo "## New Features"
-            if [ -n "$FEATS" ]; then
-              echo "$FEATS" | sed 's/^/- /'
-            else
-              echo "- TBD"
-            fi
-            echo
-
-            echo "## Improvements"
-            IMPROVEMENTS=0
-
-            for GROUP in "$DOCS" "$REFACTORS" "$PERFS" "$STYLES" "$BUILDS" "$CHORES" "$TESTS"; do
-              if [ -n "$GROUP" ]; then
-                IMPROVEMENTS=1
-              fi
-            done
-
-            if [ $IMPROVEMENTS -eq 1 ]; then
-              [ -n "$DOCS" ] && echo "$DOCS" | sed 's/^/- /'
-              [ -n "$REFACTORS" ] && echo "$REFACTORS" | sed 's/^/- /'
-              [ -n "$PERFS" ] && echo "$PERFS" | sed 's/^/- /'
-              [ -n "$STYLES" ] && echo "$STYLES" | sed 's/^/- /'
-              [ -n "$BUILDS" ] && echo "$BUILDS" | sed 's/^/- /'
-              [ -n "$CHORES" ] && echo "$CHORES" | sed 's/^/- /'
-              [ -n "$TESTS" ] && echo "$TESTS" | sed 's/^/- /'
-            else
-              echo "- TBD"
-            fi
-            echo
-
-            echo "## Fixed Issues"
-            if [ -n "$FIXES" ]; then
-              echo "$FIXES" | sed 's/^/- /'
-            else
-              echo "- TBD"
-            fi
-            echo
-
-            echo "## Known Issues"
-            echo "- TBD"
-            echo
-            echo "_This draft was auto-generated for tag: ${CURRENT_TAG}_"
-          } > release_notes.md
-
-      - name: Create draft release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          tag_name: ${{ github.ref_name }}
-          name: "RBLN Metrics Exporter ${{ github.ref_name }} Release "
-          body_path: release_notes.md
+      - name: Wait for the obedients verdict and record it
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.release.outputs.sha }}
+          BUILD_URL: ${{ needs.rc-validate.outputs.build_url }}
+          TRIGGERED_AT: ${{ needs.rc-validate.outputs.triggered_at }}
+        run: |
+          set -euo pipefail
+          post() {
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$1" -f context=rc-validation \
+              -f description="$2" -f target_url="$BUILD_URL" >/dev/null
+            echo "rc-validation=$1: $2"
+          }
+          post pending "obedients install scenario running on $GITHUB_REF_NAME"
+          # Only a status newer than the trigger counts: a re-run must not read
+          # the previous build's verdict off the same commit.
+          for _ in $(seq 1 170); do
+            # gh api has no --arg: the timestamp is interpolated into the jq program.
+            state=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" \
+              --jq ".statuses[] | select(.context == \"[Metrics Exporter] PR CI\" and .updated_at > \"$TRIGGERED_AT\") | .state")
+            case "$state" in
+              success) post success "obedients install scenario passed on $GITHUB_REF_NAME"; exit 0 ;;
+              failure|error) post failure "obedients install scenario $state on $GITHUB_REF_NAME"; exit 1 ;;
+            esac
+            sleep 60
+          done
+          post error "obedients install scenario did not finish within 170 minutes"
+          exit 1

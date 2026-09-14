@@ -1,0 +1,38 @@
+name: tag-release
+
+# Tag the HEAD of a release branch as the next rc, or as GA. Run from the
+# Actions tab, or automatically when a PR labelled `tag-rc` is merged into a
+# release-* branch (rc only; GA is never automatic).
+# Everything else lives in the release kit: https://github.com/RBLN-SW/cloud-component-release-kit
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Release branch, e.g. release-0.7.0"
+        required: true
+        type: string
+      kind:
+        description: "rc = next release candidate, ga = general availability"
+        required: true
+        type: choice
+        options: [rc, ga]
+        default: rc
+  pull_request:
+    types: [closed]
+    branches: ["release-*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-release-${{ github.event.pull_request.base.ref || inputs.branch }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    uses: RBLN-SW/cloud-component-release-kit/.github/workflows/tag-release.yaml@v1
+    with:
+      branch: ${{ github.event.pull_request.base.ref || inputs.branch }}
+      kind: ${{ inputs.kind || 'rc' }}
+    secrets: inherit

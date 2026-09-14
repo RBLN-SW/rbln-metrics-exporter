@@ -11,6 +11,16 @@ env:
   IMAGE_REGISTRY: harbor.k8s.rebellions.in/rebellions
   BUILDX_CI_IMAGE: harbor.k8s.rebellions.in/rebellions/buildx-ci:latest
 
+  # Release mode (rc validation). Set as build env by the rc-validate job in
+  # .github/workflows/release.yaml on every rc tag; absent on PR builds.
+  # RELEASE_MODE=true skips the image build and tests the published rc image
+  # IMAGE_REGISTRY/rbln-metrics-exporter:EXPORTER_IMAGE_TAG from Harbor instead
+  # of a per-commit rebuild, so what obedients validates is the digest GA later
+  # promotes. Declared as passthroughs so the steps' runtime shells see the
+  # build values.
+  RELEASE_MODE: "${RELEASE_MODE:-false}"
+  EXPORTER_IMAGE_TAG: "${EXPORTER_IMAGE_TAG:-}"
+
   # Baseline operator chart. The cloned chart's Chart.yaml appVersion is a v0.0.1
   # placeholder (only release packaging rewrites it), so operator/validator
   # images are pinned explicitly below instead of left to the chart default.
@@ -92,6 +102,11 @@ steps:
     command: |
       set -euo pipefail
 
+      if [ "$${RELEASE_MODE}" = "true" ]; then
+        echo "release mode: not rebuilding; validating ${IMAGE_REGISTRY}/rbln-metrics-exporter:$${EXPORTER_IMAGE_TAG}"
+        exit 0
+      fi
+
       echo "waiting for dockerd sidecar..."
       for i in $$(seq 1 90); do
         docker info >/dev/null 2>&1 && break
@@ -147,7 +162,7 @@ steps:
     command: |
       set -euo pipefail
 
-      IMAGE_TAG="$${BUILDKITE_COMMIT:0:8}"
+      IMAGE_TAG="$${EXPORTER_IMAGE_TAG:-$${BUILDKITE_COMMIT:0:8}}"
       REPO_ROOT="$$(pwd)"
 
       mkdir -p "$$HOME/.kube"
