@@ -1,0 +1,35 @@
+name: cut-release
+
+# Cut a release branch and tag vX.Y.Z-rc1. Run by a release manager from the
+# Actions tab (or `gh workflow run cut-release.yaml -f kind=minor`).
+# Everything else lives in the release kit: https://github.com/RBLN-SW/cloud-component-release-kit
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "minor = next feature release from main; patch = fixes-only release from the newest GA; major = explicit major bump from main"
+        required: true
+        type: choice
+        options: [minor, patch, major]
+        default: minor
+      version:
+        description: "Override the computed version (X.Y.Z). Required for the first release; leave empty otherwise."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    uses: RBLN-SW/cloud-component-release-kit/.github/workflows/cut-release.yaml@v1
+    with:
+      kind: ${{ inputs.kind }}
+      version: ${{ inputs.version }}
+    secrets: inherit

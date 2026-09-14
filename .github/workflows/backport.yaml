@@ -1,0 +1,23 @@
+name: backport
+
+# Cherry-pick a merged main PR into the release branch named by its
+# `backport release-X.Y.Z` label(s) and open the backport PR.
+# Everything else lives in the release kit: https://github.com/RBLN-SW/cloud-component-release-kit
+
+on:
+  pull_request_target:
+    types: [closed, labeled]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    uses: RBLN-SW/cloud-component-release-kit/.github/workflows/backport.yaml@v1
+    secrets: inherit
