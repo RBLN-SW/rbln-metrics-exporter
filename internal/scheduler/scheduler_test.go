@@ -61,10 +61,11 @@ func jsonRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 
 func TestRunCycleLogsFailureStreakAndRecovery(t *testing.T) {
 	buf := captureLogs(t)
-	fake := &fakeCollector{errs: []error{errors.New("daemon down"), errors.New("daemon down")}}
+	fake := &fakeCollector{errs: []error{nil, errors.New("daemon down"), errors.New("daemon down")}}
 	s := NewScheduler(collector.NewNoopPodResourceMapper(), []collector.Collector{fake}, time.Second, collector.NewUpGauge())
 	ctx := context.Background()
 
+	s.runCycle(ctx) // first collect: the daemon was up
 	s.runCycle(ctx) // fail 1
 	s.runCycle(ctx) // fail 2
 	s.runCycle(ctx) // success -> recovery record
@@ -100,5 +101,51 @@ func TestRunCycleStaysQuietOnSteadySuccess(t *testing.T) {
 
 	if recs := jsonRecords(t, buf); len(recs) != 0 {
 		t.Fatalf("got %d records on steady success, want 0: %s", len(recs), buf.String())
+	}
+}
+
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time { return c.t }
+
+func TestRunCycleWaitsForFirstCollectAtInfoThenWarns(t *testing.T) {
+	buf := captureLogs(t)
+	down := errors.New("connection refused")
+	fake := &fakeCollector{errs: []error{down, down, down}}
+	s := NewScheduler(collector.NewNoopPodResourceMapper(), []collector.Collector{fake}, 5*time.Second, collector.NewUpGauge())
+	clock := &fakeClock{t: time.Unix(1_000_000, 0)}
+	s.now = clock.now
+	ctx := context.Background()
+
+	s.runCycle(ctx) // daemon not up yet
+	clock.t = clock.t.Add(daemonWaitWarnAfter - time.Second)
+	s.runCycle(ctx) // still inside the budget
+	clock.t = clock.t.Add(time.Second)
+	s.runCycle(ctx) // budget spent -> alertable
+	s.runCycle(ctx) // daemon arrives: first collect, not a recovery
+
+	recs := jsonRecords(t, buf)
+	if len(recs) != 3 {
+		t.Fatalf("got %d records, want 3 (2 waiting infos + 1 warn): %s", len(recs), buf.String())
+	}
+	for i, want := range []struct {
+		level  string
+		msg    string
+		waited float64
+	}{
+		{"info", "Waiting for rbln-smd, retrying", 0},
+		{"info", "Waiting for rbln-smd, retrying", (daemonWaitWarnAfter - time.Second).Seconds()},
+		{"warn", "Still waiting for rbln-smd, retrying", daemonWaitWarnAfter.Seconds()},
+	} {
+		rec := recs[i]
+		if rec["level"] != want.level || rec["msg"] != want.msg {
+			t.Fatalf("record %d = %v, want %s %q", i, rec, want.level, want.msg)
+		}
+		if rec["waitedSeconds"] != want.waited {
+			t.Fatalf("record %d waitedSeconds = %v, want %v", i, rec["waitedSeconds"], want.waited)
+		}
+		if rec["err"] != down.Error() {
+			t.Fatalf("record %d err = %v, want the wait reason %q", i, rec["err"], down.Error())
+		}
 	}
 }
