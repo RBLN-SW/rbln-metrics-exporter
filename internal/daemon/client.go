@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
@@ -48,33 +49,29 @@ func (h deviceHealth) degraded() bool {
 	return h.state == rblnservicespb.DeviceStatus_FAULT || h.errStatus != 0
 }
 
-func NewClient(ctx context.Context, endpoint string) (*Client, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+// reconnectMaxDelay caps gRPC's reconnect backoff (120 s by default). The
+// channel only redials on that schedule, so after a daemon outage of a few
+// minutes — a driver reinstall — the default leaves rbln_up at 0 for up to two
+// more minutes once rbln-smd is back. A refused dial costs next to nothing, so
+// retry at about the default collection interval instead.
+const reconnectMaxDelay = 5 * time.Second
 
-	//nolint:staticcheck // keep DialContext until gRPC client migration is finished
-	conn, err := grpc.DialContext(
-		dialCtx,
-		endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(), //nolint:staticcheck // keep WithBlock until gRPC client migration is finished
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial rbln-daemon %s: %w", endpoint, err)
-	}
-
-	c := rblnservicespb.NewRBLNServicesClient(conn)
-	return &Client{
-		conn:     conn,
-		client:   c,
-		endpoint: endpoint,
-	}, nil
-}
-
+// NewLazyClient does not connect: the channel dials in the background and
+// keeps redialing, so a daemon that is not up yet, or restarts later, is
+// reached once it serves; until then RPCs fail and the caller retries on its
+// own schedule.
 func NewLazyClient(endpoint string) (*Client, error) {
+	bo := backoff.DefaultConfig
+	bo.MaxDelay = reconnectMaxDelay
 	conn, err := grpc.NewClient(
 		endpoint,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: bo,
+			// Zero would shrink each dial's deadline to the backoff delay;
+			// keep gRPC's default.
+			MinConnectTimeout: 20 * time.Second,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rbln-daemon client for %s: %w", endpoint, err)

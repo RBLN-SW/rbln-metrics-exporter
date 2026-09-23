@@ -67,10 +67,14 @@ func Start(ctx context.Context, config Config) error {
 		return startGateway(ctx, config)
 	}
 
-	dClient, err := daemon.NewClient(ctx, config.RBLNDaemonURL)
+	// rbln-smd has no start ordering relative to the exporter, so it may not
+	// be up yet: connect lazily and let the scheduler's retry reach it, the
+	// same path that rides out a daemon restart later on.
+	dClient, err := daemon.NewLazyClient(config.RBLNDaemonURL)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = dClient.Close() }()
 
 	metricRegistry := prometheus.NewRegistry()
 	isKubernetes := resolveKubernetesMode(config.KubernetesMode)
@@ -98,6 +102,11 @@ func Start(ctx context.Context, config Config) error {
 	sched := scheduler.NewScheduler(podResourceMapper, collectors, config.Interval, up)
 	go sched.Run(ctx)
 
+	// /metrics answers 200 from the start, before rbln-smd is reachable, with
+	// rbln_up 0 and no device series — the answer a daemon outage gets later
+	// and the gateway gives for a down target. Failing the endpoint instead
+	// would merge "exporter down" (up == 0) into "daemon down" (rbln_up == 0)
+	// and tie this pod's readiness to another component's health.
 	server := server.NewMetricServer(metricRegistry, config.Port)
 	if err := server.Start(ctx); err != nil {
 		return fmt.Errorf("http metrics server stopped: %w", err)
