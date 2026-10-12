@@ -1,4 +1,4 @@
-ARG GOLANG_VERSION=1.26.7
+ARG GOLANG_VERSION=1.26.9
 # Pinned to the build host: the Go toolchain cross-compiles for TARGETARCH
 # below instead of running under QEMU when the image is built for arm64.
 FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION}-alpine AS builder
@@ -27,7 +27,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM redhat/ubi9-minimal:9.8
 ARG VERSION
 
-RUN microdnf install -y shadow-utils && \
+RUN microdnf upgrade -y && \
+    microdnf install -y shadow-utils && \
     groupadd -r rbln && \
     useradd -r -g rbln -d /home/rbln -s /sbin/nologin -c "RBLN Metrics Exporter user" rbln && \
     mkdir -p /home/rbln && \
