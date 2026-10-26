@@ -2,7 +2,7 @@ module github.com/rebellions-sw/rbln-metrics-exporter
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/prometheus/client_golang v1.23.2
