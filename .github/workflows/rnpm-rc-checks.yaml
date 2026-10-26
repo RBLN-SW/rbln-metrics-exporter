@@ -1,0 +1,24 @@
+name: RNPM RC contract
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/rnpm*'
+      - '.github/scripts/test_rnpm_rc.py'
+      - '.github/workflows/release.yaml'
+      - '.github/workflows/rnpm-rc-checks.yaml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/rnpm*'
+      - '.github/scripts/test_rnpm_rc.py'
+      - '.github/workflows/release.yaml'
+      - '.github/workflows/rnpm-rc-checks.yaml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check RC request and result handling without external calls
+        run: python3 -m unittest discover -s .github/scripts -p 'test_rnpm_rc.py' -v

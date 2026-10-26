@@ -1,0 +1,13 @@
+{
+  "bundle_id": "f10a3ea4-ddf6-4283-b851-0a98afa70942",
+  "ob_pipeline": "pr-metrics-exporter",
+  "images": [
+    {
+      "name": "rbln-metrics-exporter",
+      "prefix": "METRICS_EXPORTER"
+    }
+  ],
+  "timeout_seconds": 10200,
+  "repository": "RBLN-SW/rbln-metrics-exporter",
+  "execution_repository": "RBLN-SW/rbln-metrics-exporter"
+}
