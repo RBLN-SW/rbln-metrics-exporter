@@ -1,4 +1,4 @@
-ARG GOLANG_VERSION=1.26.9
+ARG GOLANG_VERSION=1.26.10
 # Pinned to the build host: the Go toolchain cross-compiles for TARGETARCH
 # below instead of running under QEMU when the image is built for arm64.
 FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION}-alpine AS builder
@@ -21,7 +21,7 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOARCH=${TARGETARCH} go build -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
+    GOARCH=${TARGETARCH} go build -buildvcs=false -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
     -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
 FROM redhat/ubi9-minimal:9.8

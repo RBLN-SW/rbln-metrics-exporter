@@ -1,0 +1,7 @@
+# OB reference clones point at Git objects outside the Docker build context.
+.git
+
+# Local build and test artifacts are not image inputs.
+bin/
+**/__pycache__/
+*.pyc

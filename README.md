@@ -324,3 +324,8 @@ The exporter is provided under the Rebellions Software User License Agreement (s
 - [Grafana Helm Charts](https://github.com/grafana/helm-charts)
 
 Monitor confidently and keep your Rebellions NPUs healthy!
+
+## RC validation
+
+Release candidates are tested through RNPM using their published images.
+See [RC validation setup and image inputs](docs/rc-validation.md).

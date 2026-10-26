@@ -1,0 +1,14 @@
+env:
+  RNPM_URL: https://rnpm.k8s.rebellions.in
+
+agents:
+  queue: k8s
+
+steps:
+  - label: ":package: pr › upload"
+    key: rnpm-bundle-pr
+    secrets:
+      RNPM_TOKEN: RNPM_TOKEN
+    command: |
+      curl -fsSL -H "Authorization: Bearer $$RNPM_TOKEN" \
+        "${RNPM_URL}/api/v1/bundles/RBLN-SW/rbln-metrics-exporter/pr?run=$${RNPM_RUN:-}" | buildkite-agent pipeline upload
