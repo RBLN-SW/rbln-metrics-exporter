@@ -150,7 +150,7 @@ ensure-golangci-lint:
 	@echo "golangci-lint installation complete."
 
 .PHONY: code-check
-code-check: vet fmt lint verify-deps
+code-check: vet fmt lint verify-deps license-check verify-third-party-notices
 
 .PHONY: pre-commit-install
 pre-commit-install:
@@ -159,3 +159,21 @@ pre-commit-install:
 .PHONY: pre-commit-run
 pre-commit-run:
 	pre-commit run --all-files
+
+.PHONY: license-check
+license-check: ## Check that tracked Go, shell and Python sources carry a license header.
+	@fail=0; for f in $$(git ls-files '*.go' '*.sh' '*.py' | grep -v '^vendor/'); do \
+		head -25 "$$f" | grep -q 'Copyright' || { echo "missing license header: $$f"; fail=1; }; \
+	done; \
+	[ $$fail -eq 0 ] && echo "license-check: ok" || exit 1
+
+.PHONY: third-party-notices
+third-party-notices: ## Regenerate THIRD_PARTY_NOTICES from the module dependency graph.
+	python3 hack/gen-third-party-notices.py .
+
+.PHONY: verify-third-party-notices
+verify-third-party-notices: ## Check that THIRD_PARTY_NOTICES matches the dependency graph.
+	@tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+	python3 hack/gen-third-party-notices.py . "$$tmp" >/dev/null || { echo "verify-third-party-notices: generator failed"; exit 1; }; \
+	cmp -s "$$tmp" THIRD_PARTY_NOTICES || { echo "THIRD_PARTY_NOTICES is out of date; run 'make third-party-notices'"; exit 1; }; \
+	echo "verify-third-party-notices: ok"

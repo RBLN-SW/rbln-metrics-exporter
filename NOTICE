@@ -1,0 +1,17 @@
+RBLN Metrics Exporter
+Copyright 2025-2026 Rebellions Inc.
+
+This product includes software developed by Rebellions Inc.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+api/rbln_services.proto is a copy of the public gRPC API definition of
+rbln-smd (the Rebellions NPU system management daemon), authored by
+Rebellions Inc. and licensed here under the Apache License 2.0. The daemon
+itself is a separate product (see below).
+
+Third-party Go modules compiled into the binaries are listed with their
+licenses in THIRD_PARTY_NOTICES.
+
+The RBLN NPU driver, rbln-smd, rbln-smi and the NPU runtime libraries are
+not part of this product. They are distributed separately under the
+Rebellions Software User License Agreement.

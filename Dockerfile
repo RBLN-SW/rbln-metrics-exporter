@@ -35,7 +35,7 @@ RUN microdnf upgrade -y && \
     chown rbln:rbln /home/rbln && \
     microdnf clean all
 
-COPY LICENSE /licenses/LICENSE.txt
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /licenses/
 
 LABEL \
     name="rbln-metrics-exporter" \
@@ -46,7 +46,10 @@ LABEL \
     description="The Metrics Exporter exposes detailed NPU device metrics in Prometheus format for visualization" \
     maintainer="Rebellions sw_devops@rebellions.ai" \
     io.k8s.display-name="Rebellions Metrics Exporter" \
-    com.redhat.component="rbln-metrics-exporter"
+    com.redhat.component="rbln-metrics-exporter" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.source="https://github.com/RBLN-SW/rbln-metrics-exporter" \
+    org.opencontainers.image.vendor="Rebellions Inc."
 
 COPY --from=builder /usr/local/bin/rbln-metrics-exporter /usr/local/bin/rbln-metrics-exporter
 RUN chown rbln:rbln /usr/local/bin/rbln-metrics-exporter && \
