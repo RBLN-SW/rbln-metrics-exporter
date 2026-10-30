@@ -1,8 +1,9 @@
 # proto
 
 `rbln_services.proto` is a copy of the rbln-daemon (RSMD) public v0 API,
-kept byte-identical to the daemon's source of truth except for the added
-`go_package` option.
+kept identical to the daemon's source of truth except for the added
+`go_package` option and the Apache-2.0 license header, which replaces the
+source file's internal header (the sync check ignores comment lines).
 
 ## Sync provenance
 

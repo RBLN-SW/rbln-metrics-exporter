@@ -310,12 +310,6 @@ rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_versi
 
 ---
 
-## Licensing
-
-The exporter is provided under the Rebellions Software User License Agreement (see [`LICENSE`](./LICENSE)). Review the agreement before distributing or embedding the binary or container image.
-
----
-
 ## Additional Resources
 
 - [RBLN Device Plugin](https://github.com/rebellions-sw/rbln-k8s-device-plugin)
@@ -329,3 +323,16 @@ Monitor confidently and keep your Rebellions NPUs healthy!
 
 Release candidates are tested through RNPM using their published images.
 See [RC validation setup and image inputs](docs/rc-validation.md).
+
+## License
+
+Copyright 2025-2026 Rebellions Inc.
+
+This project is licensed under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) for attributions to upstream projects and
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for the licenses of the Go modules
+compiled into the binaries.
+
+The RBLN NPU driver, rbln-smd, rbln-smi and the NPU runtime libraries are
+separate products distributed under the Rebellions Software User License
+Agreement.
