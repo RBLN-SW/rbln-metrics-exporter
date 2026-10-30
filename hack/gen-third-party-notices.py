@@ -14,13 +14,14 @@
 
 """Generate THIRD_PARTY_NOTICES for the Go modules compiled into the binaries.
 
-Usage: python3 hack/gen-third-party-notices.py <repo root> [output path]
+Usage: python3 hack/gen-third-party-notices.py --mode {vendor,module} <repo root> [output path]
 
-Two modes, selected automatically:
-- vendor mode: vendor/modules.txt exists. Every vendored module's LICENSE,
+The Makefile pins the mode for each repository, so a local vendor directory
+cannot change the generated document.
+- vendor mode: requires vendor/modules.txt. Every vendored module's LICENSE,
   COPYING and NOTICE files (including nested ones for forked or internal
   third-party packages) are copied into one document.
-- module mode: no vendor directory. The linked package set is taken from
+- module mode: ignores any vendor directory. The linked package set is taken from
   `GOOS=linux go list -deps ./...` and license files are collected from the
   module cache, at the module root and in the directories of the linked
   packages (walking up to the module root).
@@ -28,11 +29,17 @@ Two modes, selected automatically:
 Modules without any license file are listed with "License: NONE" so the gap
 is visible; they must be fixed at the source.
 """
-import os, subprocess, sys
+import argparse, os, subprocess, sys
 from collections import Counter, OrderedDict
 
-R = sys.argv[1].rstrip('/') + '/'
-OUT = sys.argv[2] if len(sys.argv) > 2 else R + 'THIRD_PARTY_NOTICES'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--mode', choices=('vendor', 'module'), required=True)
+parser.add_argument('root')
+parser.add_argument('output', nargs='?')
+args = parser.parse_args()
+MODE = args.mode
+R = args.root.rstrip('/') + '/'
+OUT = args.output if args.output is not None else R + 'THIRD_PARTY_NOTICES'
 def _product():
     try:
         first = open(R + 'NOTICE', encoding='utf-8').readline().strip()
@@ -84,8 +91,9 @@ def has_go_sources(d, modroots):
 
 entries = []  # (module, version, license, [root lic], [root notice], [nested files], base)
 skipped = []
-if os.path.exists(R + 'vendor/modules.txt'):
-    MODE = 'vendor'
+if MODE == 'vendor':
+    if not os.path.isfile(R + 'vendor/modules.txt'):
+        parser.error('--mode vendor requires vendor/modules.txt')
     mods = []          # (module, version, has vendored packages)
     for ln in open(R + 'vendor/modules.txt'):
         if ln.startswith('# '):
@@ -104,7 +112,6 @@ if os.path.exists(R + 'vendor/modules.txt'):
         l = classify(open(lic[0], encoding='utf-8', errors='replace').read()) if lic else 'see nested'
         entries.append((m, v, l, lic, notice, nested, R))
 else:
-    MODE = 'module'
     env = dict(os.environ, GOOS='linux', GOFLAGS='-mod=mod')
     out = subprocess.run(['go', 'list', '-deps', '-f', '{{if and .Module (not .Module.Main)}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}\t{{.Dir}}{{end}}', './...'],
                          capture_output=True, text=True, cwd=R, env=env)
