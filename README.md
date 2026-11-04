@@ -157,20 +157,23 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 - Memory utilization by namespace/pod
 - Device readiness (`health=0` when READY) and fault-state alarms (`device_status{state="fault"}=1`)
 
-### SMD v1 upgrade notes
+### SMD API compatibility and SR-IOV notes
 
 This update includes breaking changes:
 
-- SMD must implement the v1 Inventory, Metric and Topology APIs; v0-only daemons
-  are no longer supported. See [API requirements](api/README.md).
-- The exporter creates a clock-free metric group automatically, requiring
+- The exporter prefers v1 and uses v0 collection when a required v1 RPC is
+  unimplemented. Missing v1 lifecycle state is supplemented from v0
+  `dev_status` when available. Known v1 states are preserved; there is no
+  product-specific or user-selected API mode. See [API requirements](api/README.md).
+- For v1 collection, the exporter creates a clock-free metric group, requiring
   `MetricService.CreateMetricGroup` permission. To use a pre-provisioned group,
   set `--metric-group-id` and `--create-metric-group=false`. Use `--help` for
   TLS and other connection options.
 - `health` is 0 for READY and 1 for another known lifecycle state. Unknown
   state has no health sample. `state="not_found"` is replaced by `unknown`,
   which means unavailable state information, not missing hardware.
-- Unavailable readings are omitted rather than reported as zero. The new
+- Unavailable v1 readings are omitted rather than reported as zero. The v0
+  scalar API cannot distinguish absent readings from measured zero. The new
   `rbln_npu_collection_success` reports per-device query outcomes separately
   from readiness; successful queries do not guarantee every metric is available.
 - Native VFs gain memory/utilization and Pod attribution. Hosting PFs no longer

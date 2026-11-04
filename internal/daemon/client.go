@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
 	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
 )
 
@@ -25,13 +26,16 @@ type Client struct {
 	inventory pb.InventoryServiceClient
 	metrics   pb.MetricServiceClient
 	topology  pb.TopologyServiceClient
+	legacy    legacy.RBLNServicesClient
 	endpoint  string
 	options   Options
 	// Gateway scrapes share the client. Serialize snapshots and transition logs.
-	mu            sync.Mutex
-	collectedOnce bool
-	prevMissing   map[string]bool
-	prevState     map[string]pb.DeviceState
+	mu                sync.Mutex
+	collectedOnce     bool
+	prevMissing       map[string]bool
+	prevState         map[string]pb.DeviceState
+	activeAPI         string
+	stateLookupFailed bool
 }
 
 func NewLazyClient(endpoint string, options ...Options) (*Client, error) {
@@ -55,7 +59,7 @@ func NewLazyClient(endpoint string, options ...Options) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create rbln-smd client: %w", err)
 	}
-	return &Client{conn: conn, inventory: pb.NewInventoryServiceClient(conn), metrics: pb.NewMetricServiceClient(conn), topology: pb.NewTopologyServiceClient(conn), endpoint: endpoint, options: opts}, nil
+	return &Client{conn: conn, inventory: pb.NewInventoryServiceClient(conn), metrics: pb.NewMetricServiceClient(conn), topology: pb.NewTopologyServiceClient(conn), legacy: legacy.NewRBLNServicesClient(conn), endpoint: endpoint, options: opts}, nil
 }
 
 func (c *Client) Close() error { return c.conn.Close() }
@@ -63,23 +67,44 @@ func (c *Client) Close() error { return c.conn.Close() }
 func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	devices, err := c.listDevices(ctx)
+	api := "v1"
+	devices, missing, err := c.collectV1(ctx)
+	if status.Code(err) == codes.Unimplemented {
+		api = "v0"
+		devices, missing, err = c.collectV0(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
+	if api == "v1" {
+		c.supplementLegacyStates(ctx, devices)
+	}
+	if c.activeAPI != api {
+		slog.Info("Selected SMD collection API", "endpoint", c.endpoint, "api", api)
+		c.activeAPI = api
+	}
+	c.recordDeviceTransitions(devices, missing)
+	return devices, nil
+}
+
+func (c *Client) collectV1(ctx context.Context) ([]DeviceInfo, map[string]bool, error) {
+	devices, err := c.listDevices(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	topologies, topologyFailures, err := c.listTopology(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	readings := map[string][]*pb.MetricSample{}
 	missing := map[string]bool{}
 	if len(devices) > 0 {
 		if err := c.ensureMetricGroup(ctx); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		resp, err := c.metrics.SampleMetrics(ctx, &pb.SampleMetricsRequest{Group: &pb.MetricGroupRef{Id: c.options.MetricGroupID}})
 		if err != nil {
-			return nil, fmt.Errorf("SampleMetrics: %w", err)
+			return nil, nil, fmt.Errorf("SampleMetrics: %w", err)
 		}
 		for _, e := range resp.GetUnreachable() {
 			missing[e.GetRef()] = true
@@ -105,7 +130,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			if err == nil {
 				versions = &pb.VersionInfo{FwVersion: v.GetFwVersion(), DrvVersion: v.GetDrvVersion(), SmcVersion: v.GetSmcVersion()}
 			} else if !deviceUnavailable(err) {
-				return nil, fmt.Errorf("GetVersion(%s): %w", di.Name, err)
+				return nil, nil, fmt.Errorf("GetVersion(%s): %w", di.Name, err)
 			} else {
 				di.CollectionSucceeded = false
 			}
@@ -117,7 +142,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 			if err == nil {
 				memory = m.GetMemory()
 			} else if !deviceUnavailable(err) {
-				return nil, fmt.Errorf("GetMemorySpec(%s): %w", di.Name, err)
+				return nil, nil, fmt.Errorf("GetMemorySpec(%s): %w", di.Name, err)
 			} else {
 				di.CollectionSucceeded = false
 			}
@@ -137,8 +162,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 		}
 		merged = append(merged, di)
 	}
-	c.recordDeviceTransitions(merged, missing)
-	return merged, nil
+	return merged, missing, nil
 }
 
 func deviceUnavailable(err error) bool {
@@ -157,7 +181,7 @@ func (c *Client) listDevices(ctx context.Context) ([]*pb.DeviceInfo, error) {
 	for {
 		r, err := c.inventory.ListDevices(ctx, &pb.ListDevicesRequest{Filter: pb.DeviceListFilter_DEVICE_LIST_FILTER_ALL, Detail: pb.DeviceListDetail_DEVICE_LIST_DETAIL_FULL, PageSize: 1000, PageToken: token})
 		if err != nil {
-			return nil, fmt.Errorf("InventoryService.ListDevices (requires an implemented SMD v1 API): %w", err)
+			return nil, fmt.Errorf("InventoryService.ListDevices: %w", err)
 		}
 		unavailable := map[string]bool{}
 		for _, e := range r.GetUnreachable() {

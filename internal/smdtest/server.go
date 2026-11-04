@@ -1,4 +1,4 @@
-// Package smdtest provides an in-process v1 daemon for exporter integration tests.
+// Package smdtest provides in-process SMD APIs for exporter integration tests.
 package smdtest
 
 import (
@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
 	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
 )
 
@@ -35,6 +36,8 @@ type Server struct {
 	Errors              map[string]error
 	Unreachable         []*pb.EntityStatus
 	TopologyUnreachable []*pb.EntityStatus
+	Legacy              *LegacyServer
+	LegacyOnly          bool
 }
 
 func (s *Server) Set(devices []*pb.DeviceInfo, samples []*pb.MetricSample) {
@@ -55,9 +58,14 @@ func Serve(t testing.TB, s *Server, address string, transport *TLS) (string, fun
 		t.Fatal(err)
 	}
 	g := grpc.NewServer(grpc.Creds(credentials.NewTLS(transport.ServerConfig.Clone())))
-	pb.RegisterInventoryServiceServer(g, s)
-	pb.RegisterMetricServiceServer(g, s)
-	pb.RegisterTopologyServiceServer(g, s)
+	if !s.LegacyOnly {
+		pb.RegisterInventoryServiceServer(g, s)
+		pb.RegisterMetricServiceServer(g, s)
+		pb.RegisterTopologyServiceServer(g, s)
+	}
+	if s.Legacy != nil {
+		legacy.RegisterRBLNServicesServer(g, s.Legacy)
+	}
 	go func() { _ = g.Serve(l) }()
 	return l.Addr().String(), g.Stop
 }
