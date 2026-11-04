@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest"
 )
@@ -131,9 +132,9 @@ func freeAddr(t *testing.T) string { return freeTCPAddr(t).String() }
 func freePort(t *testing.T) int { return freeTCPAddr(t).Port }
 
 // serveDaemon brings a fake rbln-smd up on addr and returns its stop func.
-func serveDaemon(t *testing.T, addr string) func() {
+func serveDaemon(t *testing.T, addr string, transport *smdtest.TLS) func() {
 	t.Helper()
-	_, stop := smdtest.Serve(t, &smdtest.Server{}, addr)
+	_, stop := smdtest.Serve(t, &smdtest.Server{}, addr, transport)
 	t.Cleanup(stop)
 	return stop
 }
@@ -195,7 +196,7 @@ func waitForUp(t *testing.T, url string, want int, done <-chan error) {
 	})
 }
 
-func localConfig(daemonAddr string, port int) Config {
+func localConfig(daemonAddr string, port int, caFile string) Config {
 	return Config{
 		Mode:           ModeLocal,
 		RBLNDaemonURL:  daemonAddr,
@@ -203,15 +204,17 @@ func localConfig(daemonAddr string, port int) Config {
 		Interval:       time.Second,
 		NodeName:       "node-1",
 		KubernetesMode: KubernetesModeOff,
+		SMD:            daemon.Options{TLSCA: caFile},
 	}
 }
 
 func TestStartWaitsForDaemonThatComesUpLater(t *testing.T) {
 	logs := captureLogs(t)
+	transport := smdtest.NewTLS(t)
 	daemonAddr := freeAddr(t)
 	port := freePort(t)
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
-	done := startExporter(t, localConfig(daemonAddr, port))
+	done := startExporter(t, localConfig(daemonAddr, port, transport.CAFile))
 
 	// No daemon yet: /metrics answers, reporting the daemon as unreachable,
 	// and collects keep failing without ending the process.
@@ -221,7 +224,7 @@ func TestStartWaitsForDaemonThatComesUpLater(t *testing.T) {
 		return strings.Contains(l, `"msg":"Waiting for rbln-smd, retrying"`), l
 	})
 
-	serveDaemon(t, daemonAddr)
+	serveDaemon(t, daemonAddr, transport)
 	waitForUp(t, url, 1, done)
 
 	if l := logs.String(); strings.Contains(l, "Metrics collection failed") {
@@ -230,28 +233,30 @@ func TestStartWaitsForDaemonThatComesUpLater(t *testing.T) {
 }
 
 func TestStartRecoversWhenDaemonRestarts(t *testing.T) {
+	transport := smdtest.NewTLS(t)
 	daemonAddr := freeAddr(t)
 	port := freePort(t)
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", port)
-	stop := serveDaemon(t, daemonAddr)
-	done := startExporter(t, localConfig(daemonAddr, port))
+	stop := serveDaemon(t, daemonAddr, transport)
+	done := startExporter(t, localConfig(daemonAddr, port, transport.CAFile))
 	waitForUp(t, url, 1, done)
 
 	stop()
 	waitForUp(t, url, 0, done)
 
-	serveDaemon(t, daemonAddr)
+	serveDaemon(t, daemonAddr, transport)
 	waitForUp(t, url, 1, done)
 }
 
 func TestStartGatewayReportsAbsentTargetThenRecovers(t *testing.T) {
+	transport := smdtest.NewTLS(t)
 	daemonAddr := freeAddr(t)
 	port := freePort(t)
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics?target=%s", port, daemonAddr)
-	done := startExporter(t, Config{Mode: ModeGateway, Port: port})
+	done := startExporter(t, Config{Mode: ModeGateway, Port: port, SMD: daemon.Options{TLSCA: transport.CAFile}})
 
 	waitForUp(t, url, 0, done)
 
-	serveDaemon(t, daemonAddr)
+	serveDaemon(t, daemonAddr, transport)
 	waitForUp(t, url, 1, done)
 }

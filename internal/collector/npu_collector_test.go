@@ -77,9 +77,11 @@ func TestCollectionVFProfilesAndSeriesLifecycle(t *testing.T) {
 		smdtest.Int(vf.Name, pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, 1024),
 		smdtest.Int(vf.Name, pb.MetricId_METRIC_ID_PSTATE, 2),
 	})
-	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0")
+	transport := smdtest.NewTLS(t)
+	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0", transport)
 	t.Cleanup(stop)
 	opts := daemon.DefaultOptions()
+	opts.TLSCA = transport.CAFile
 	opts.PCIDevicesPath = root
 	client, err := daemon.NewLazyClient(addr, opts)
 	if err != nil {
@@ -263,9 +265,12 @@ func TestPFMetricContractFromKnownReadings(t *testing.T) {
 				smdtest.Int(d.Name, pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, 1<<30),
 				smdtest.Int(d.Name, pb.MetricId_METRIC_ID_PSTATE, 2),
 			})
-			addr, stop := smdtest.Serve(t, s, "127.0.0.1:0")
+			transport := smdtest.NewTLS(t)
+			addr, stop := smdtest.Serve(t, s, "127.0.0.1:0", transport)
 			t.Cleanup(stop)
-			client, err := daemon.NewLazyClient(addr)
+			opts := daemon.DefaultOptions()
+			opts.TLSCA = transport.CAFile
+			client, err := daemon.NewLazyClient(addr, opts)
 			if err != nil {
 				t.Fatal(err)
 			}

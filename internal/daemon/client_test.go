@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -22,9 +23,15 @@ import (
 
 func startFake(t *testing.T, s *smdtest.Server, options ...Options) *Client {
 	t.Helper()
-	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0")
+	transport := smdtest.NewTLS(t)
+	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0", transport)
 	t.Cleanup(stop)
-	c, err := NewLazyClient(addr, options...)
+	opts := DefaultOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	opts.TLSCA = transport.CAFile
+	c, err := NewLazyClient(addr, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,5 +397,30 @@ func TestEmptySuccessfulSamplesDoNotInventTelemetryOrFailures(t *testing.T) {
 	}
 	if _, known := got.Health(); known {
 		t.Fatal("successful query fabricated device health")
+	}
+}
+
+func TestTLSRejectsUntrustedDaemon(t *testing.T) {
+	s := &smdtest.Server{}
+	transport := smdtest.NewTLS(t)
+	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0", transport)
+	t.Cleanup(stop)
+	untrusted := smdtest.NewTLS(t)
+	opts := DefaultOptions()
+	opts.TLSCA = untrusted.CAFile
+	client, err := NewLazyClient(addr, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := client.GetDeviceInfo(ctx); err == nil {
+		t.Fatal("accepted an untrusted server certificate")
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if len(s.InventoryRequests) != 0 {
+		t.Fatal("untrusted connection reached the daemon")
 	}
 }

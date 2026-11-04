@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -52,14 +51,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		slog.Debug("Rejected scrape request", "target", target, "err", err)
-		http.Error(w, fmt.Sprintf("invalid target %q: expected <host:port>: %v", target, err), http.StatusBadRequest)
+		http.Error(w, "invalid target: expected host:port", http.StatusBadRequest)
 		return
 	}
 
 	client, err := h.clientFor(target)
 	if err != nil {
 		slog.Debug("Rejected scrape request", "target", target, "err", err)
-		http.Error(w, fmt.Sprintf("invalid target %q: %v", target, err), http.StatusBadRequest)
+		http.Error(w, "unable to initialize SMD client", http.StatusBadRequest)
 		return
 	}
 

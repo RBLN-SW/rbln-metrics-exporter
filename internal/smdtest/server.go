@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -43,13 +44,17 @@ func (s *Server) Set(devices []*pb.DeviceInfo, samples []*pb.MetricSample) {
 	s.Samples = proto.Clone(&pb.SampleMetricsResponse{Samples: samples}).(*pb.SampleMetricsResponse).Samples
 }
 
-func Serve(t testing.TB, s *Server, address string) (string, func()) {
+func Serve(t testing.TB, s *Server, address string, transport *TLS) (string, func()) {
 	t.Helper()
+	host, _, err := net.SplitHostPort(address)
+	if err != nil || !net.ParseIP(host).IsLoopback() {
+		t.Fatalf("test SMD must listen on a loopback IP: %q", address)
+	}
 	l, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := grpc.NewServer()
+	g := grpc.NewServer(grpc.Creds(credentials.NewTLS(transport.ServerConfig.Clone())))
 	pb.RegisterInventoryServiceServer(g, s)
 	pb.RegisterMetricServiceServer(g, s)
 	pb.RegisterTopologyServiceServer(g, s)
