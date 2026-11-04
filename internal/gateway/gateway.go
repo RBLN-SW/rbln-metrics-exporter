@@ -28,10 +28,17 @@ const (
 type Handler struct {
 	mu      sync.Mutex
 	clients map[string]*daemon.Client
+	options daemon.Options
 }
 
-func NewHandler() *Handler {
+func NewHandler(options ...daemon.Options) *Handler {
+	opts := daemon.DefaultOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	opts.PCIDevicesPath = ""
 	return &Handler{
+		options: opts,
 		clients: make(map[string]*daemon.Client),
 	}
 }
@@ -107,7 +114,7 @@ func (h *Handler) clientFor(target string) (*daemon.Client, error) {
 		slog.Debug("Reusing cached daemon client", "target", target)
 		return client, nil
 	}
-	client, err := daemon.NewLazyClient(target)
+	client, err := daemon.NewLazyClient(target, h.options)
 	if err != nil {
 		return nil, err
 	}

@@ -14,34 +14,26 @@ type DeviceHealthMetric struct {
 	includePodLabels  bool
 }
 
-func NewDeviceHealthMetric(podResourceMapper *PodResourceMapper, nodeName string, includePodLabels bool) *DeviceHealthMetric {
-	labels := labelNames(includePodLabels)
+func NewDeviceHealthMetric(mapper *PodResourceMapper, nodeName string, includePodLabels bool) *DeviceHealthMetric {
 	return &DeviceHealthMetric{
-		healthStatus: prometheus.NewGaugeVec(
-			prometheus.GaugeOpts{
-				Name: metricName("RBLN_DEVICE_STATUS:HEALTH", "rbln_npu_health"),
-				Help: "NPU health status",
-			}, labels,
-		),
-		podResourceMapper: podResourceMapper,
+		healthStatus: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: metricName("RBLN_DEVICE_STATUS:HEALTH", "rbln_npu_health"),
+			Help: "NPU readiness: 0 when READY, 1 for another known lifecycle state; absent when state is unknown",
+		}, labelNames(includePodLabels)),
+		podResourceMapper: mapper,
 		NodeName:          nodeName,
 		includePodLabels:  includePodLabels,
 	}
 }
 
-func (d *DeviceHealthMetric) Register(registerer prometheus.Registerer) {
-	registerer.MustRegister(d.healthStatus)
-}
+func (m *DeviceHealthMetric) Register(reg prometheus.Registerer) { reg.MustRegister(m.healthStatus) }
+func (m *DeviceHealthMetric) Reset()                             { m.healthStatus.Reset() }
 
-func (d *DeviceHealthMetric) Reset() {
-	d.healthStatus.Reset()
-}
-
-func (d *DeviceHealthMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := d.podResourceMapper.Snapshot()
-
-	for _, device := range devices {
-		labels := buildLabels(device, d.NodeName, podResourceInfo, d.includePodLabels)
-		d.healthStatus.With(labels).Set(float64(device.ErrStatus))
+func (m *DeviceHealthMetric) UpdateMetrics(_ context.Context, devices []daemon.DeviceInfo) {
+	pods, _ := m.podResourceMapper.SnapshotFor(devices)
+	for _, d := range devices {
+		if value, known := d.Health(); known {
+			m.healthStatus.With(buildLabels(d, m.NodeName, pods, m.includePodLabels)).Set(value)
+		}
 	}
 }

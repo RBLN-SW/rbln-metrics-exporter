@@ -14,10 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
-
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
-	"github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest"
 )
 
 // syncBuffer lets a test read logs while Start's goroutines write them.
@@ -118,24 +116,6 @@ func TestResolveKubernetesModeLogsResolution(t *testing.T) {
 	}
 }
 
-// fakeDaemon answers the collection RPCs with an empty device list, which is
-// all a successful collect (rbln_up 1) needs.
-type fakeDaemon struct {
-	rblnservicespb.UnimplementedRBLNServicesServer
-}
-
-func (fakeDaemon) GetServiceableDeviceList(*rblnservicespb.Empty, grpc.ServerStreamingServer[rblnservicespb.Device]) error {
-	return nil
-}
-
-func (fakeDaemon) GetTotalInfo(*rblnservicespb.Empty, grpc.ServerStreamingServer[rblnservicespb.DeviceInfo]) error {
-	return nil
-}
-
-func (fakeDaemon) RblnListTopology(context.Context, *rblnservicespb.DeviceFilter) (*rblnservicespb.RblnListTopologyResponse, error) {
-	return &rblnservicespb.RblnListTopologyResponse{}, nil
-}
-
 func freeTCPAddr(t *testing.T) *net.TCPAddr {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -153,19 +133,11 @@ func freePort(t *testing.T) int { return freeTCPAddr(t).Port }
 // serveDaemon brings a fake rbln-smd up on addr and returns its stop func.
 func serveDaemon(t *testing.T, addr string) func() {
 	t.Helper()
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("failed to listen on %s: %v", addr, err)
-	}
-	srv := grpc.NewServer()
-	rblnservicespb.RegisterRBLNServicesServer(srv, fakeDaemon{})
-	go func() { _ = srv.Serve(lis) }()
-	t.Cleanup(srv.Stop)
-	return srv.Stop
+	_, stop := smdtest.Serve(t, &smdtest.Server{}, addr)
+	t.Cleanup(stop)
+	return stop
 }
 
-// startExporter runs Start in the background and returns the channel its
-// result lands on; cleanup cancels it and waits for a clean return.
 func startExporter(t *testing.T, cfg Config) <-chan error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

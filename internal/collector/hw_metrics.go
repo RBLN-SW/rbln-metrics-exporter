@@ -47,11 +47,15 @@ func (h *HardwareInfoMetric) Reset() {
 }
 
 func (h *HardwareInfoMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := h.podResourceMapper.Snapshot()
+	podResourceInfo, _ := h.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
 		labels := buildLabels(device, h.NodeName, podResourceInfo, h.includePodLabels)
-		h.temperature.With(labels).Set(device.Temperature)
-		h.power.With(labels).Set(device.Power)
+		if device.Temperature != nil {
+			h.temperature.With(labels).Set(*device.Temperature)
+		}
+		if device.Power != nil {
+			h.power.With(labels).Set(*device.Power)
+		}
 	}
 }

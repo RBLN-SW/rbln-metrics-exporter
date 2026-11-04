@@ -62,7 +62,7 @@ func TestSharedDeviceMetricFlagsOnlyMultiPodDevices(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metric := NewSharedDeviceMetric(mapper, "test-node")
 	metric.Register(registry)
-	metric.UpdateMetrics(context.Background(), []daemon.DeviceInfo{{Name: "rbln0"}, {Name: "rbln1"}})
+	metric.UpdateMetrics(context.Background(), []daemon.DeviceInfo{{Name: "rbln0", Compute: true}, {Name: "rbln1", Compute: true}})
 
 	got := sharedGaugeByDevice(t, registry)
 	if len(got) != 2 {
@@ -99,7 +99,7 @@ func TestSharedDeviceMetricClearsWhenSharingEnds(t *testing.T) {
 	metric := NewSharedDeviceMetric(mapper, "test-node")
 	metric.Register(registry)
 
-	devices := []daemon.DeviceInfo{{Name: "rbln0"}}
+	devices := []daemon.DeviceInfo{{Name: "rbln0", Compute: true}}
 	metric.UpdateMetrics(context.Background(), devices)
 	if got := sharedGaugeByDevice(t, registry); got["rbln0"].value != 1 {
 		t.Fatalf("rbln0 before release: want 1, got %v", got["rbln0"].value)

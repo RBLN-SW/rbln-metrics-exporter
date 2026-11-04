@@ -22,14 +22,16 @@ const (
 
 	state = "state"
 
-	smcVersion = "smc_version"
-	pciBusID   = "pci_bus_id"
-	numaNode   = "numa_node"
-	rsdGroup   = "rsd_group"
-	cpuList    = "cpu_list"
-	isVF       = "is_vf"
-	parentName = "parent_name"
-	numVFs     = "num_vfs"
+	smcVersion    = "smc_version"
+	pciBusID      = "pci_bus_id"
+	numaNode      = "numa_node"
+	rsdGroup      = "rsd_group"
+	cpuList       = "cpu_list"
+	isVF          = "is_vf"
+	parentName    = "parent_name"
+	numVFs        = "num_vfs"
+	partitionMode = "partition_mode"
+	compute       = "compute"
 )
 
 var baseLabels = []string{
@@ -60,6 +62,8 @@ var deviceInfoOnlyLabels = []string{
 	isVF,
 	parentName,
 	numVFs,
+	partitionMode,
+	compute,
 }
 
 func deviceInfoLabelNames(includePodLabels bool) []string {
@@ -79,6 +83,9 @@ func buildLabels(device daemon.DeviceInfo, nodeName string, podResourceInfo map[
 
 	if includePodLabels {
 		info := podResourceInfo[DeviceName(device.Name)]
+		if !device.Compute {
+			info = PodResourceInfo{}
+		}
 		labels[namespace] = info.Namespace
 		labels[pod] = info.Name
 		labels[container] = info.ContainerName
@@ -94,7 +101,12 @@ func buildDeviceInfoLabels(device daemon.DeviceInfo, nodeName string, podResourc
 	labels[pciBusID] = device.PCIBusID
 	labels[isVF] = strconv.FormatBool(device.IsVF)
 	labels[parentName] = device.ParentName
-	labels[numVFs] = strconv.FormatUint(uint64(device.NumVFs), 10)
+	labels[numVFs] = ""
+	if device.NumVFs != nil {
+		labels[numVFs] = strconv.FormatUint(uint64(*device.NumVFs), 10)
+	}
+	labels[partitionMode] = device.PartitionMode
+	labels[compute] = strconv.FormatBool(device.Compute)
 
 	labels[numaNode] = ""
 	labels[rsdGroup] = ""

@@ -1,0 +1,1776 @@
+/*
+ * [Rebellions Inc.]("Rebellions") CONFIDENTIAL
+ * Unpublished Copyright (c) 2021-2026 [Rebellions Inc.], All Rights Reserved.
+ *
+ * NOTICE: All information contained herein is, and remains the property of Rebellions.
+ * The intellectual and technical concepts contained herein are proprietary to Rebellions
+ * and may be covered by Republic of Korea, U.S., and other countries' Patents, patents
+ * in process, and are protected by trade secret or copyright law.
+ *
+ * Dissemination of this information or reproduction of this material is strictly forbidden
+ * unless prior written permission is obtained from Rebellions. Access to the source code
+ * contained herein is hereby forbidden to anyone except current Rebellions employees, managers
+ * or contractors who have executed Confidentiality and Non-disclosure agreements explicitly
+ * covering such access.
+ *
+ * The copyright notice above does not evidence any actual or intended publication or disclosure
+ * of this source code, which includes information that is confidential and/or proprietary, and
+ * is a trade secret, of Rebellions.
+ *
+ * ANY REPRODUCTION, MODIFICATION, DISTRIBUTION, PUBLIC PERFORMANCE, OR PUBLIC DISPLAY OF OR
+ * THROUGH USE OF THIS SOURCE CODE WITHOUT THE EXPRESS WRITTEN CONSENT OF REBELLIONS IS STRICTLY
+ * PROHIBITED, AND IN VIOLATION OF APPLICABLE LAWS AND INTERNATIONAL TREATIES. THE RECEIPT OR
+ * POSSESSION OF THIS SOURCE CODE AND/OR RELATED INFORMATION DOES NOT CONVEY OR IMPLY ANY RIGHTS
+ * TO REPRODUCE, DISCLOSE OR DISTRIBUTE ITS CONTENTS, OR TO MANUFACTURE, USE, OR SELL ANYTHING
+ * THAT IT MAY DESCRIBE, IN WHOLE OR IN PART.
+ */
+
+// rbln_smd_v1.proto — RSMD gRPC API surface, version 1.
+
+syntax = "proto3";
+
+package rblnservices.v1;
+
+option go_package = "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/descriptor.proto";
+
+// =====================================================================
+// Operation type — machine-readable RPC classification
+// =====================================================================
+
+// The operation type of an RPC: the axis a client uses to reason about a
+// method's effect and the privilege it requires. It is carried as a method
+// option (see `rpc_type` below) so the classification lives on the method
+// itself rather than in prose, and every RPC in this file declares one.
+//
+//   QUERY   : reads state; does not mutate device or daemon state.
+//   COMMAND : mutates device or daemon state.
+//   STREAM  : a server-streaming read.
+//
+// Query and Stream are observational; Command is state-mutating. A server may
+// map these to distinct authorization requirements (e.g. a stricter privilege
+// tier for Command).
+enum RpcType {
+    RPC_TYPE_UNSPECIFIED = 0;
+    RPC_TYPE_QUERY       = 1;
+    RPC_TYPE_COMMAND     = 2;
+    RPC_TYPE_STREAM      = 3;
+}
+
+extend google.protobuf.MethodOptions {
+    // Operation type of the annotated RPC. Every method in this file sets it.
+    // Field number is in the 50000-99999 range reserved for in-house options.
+    RpcType rpc_type = 50001;
+}
+
+// =====================================================================
+// Common types
+// =====================================================================
+
+// Cause domain of a failure — the "what kind of thing went wrong" axis.
+// Lets a caller route a failure without parsing the free-text message.
+// A coarse error KIND for the fact surfaces (op-failure responses, events,
+// journal), derived by the server from `ErrorDetail.code` / `EventInfo.code`.
+// The fact surfaces state only WHAT happened; a fault's severity and
+// remediation are not carried on any wire surface.
+enum ErrorCategory {
+    ERROR_CATEGORY_UNSPECIFIED = 0;
+    // DEV_ERR — a device-side condition: driver-recovery (hang/timeout,
+    // command-processor fault, firmware halt, reset/restore/resume/init and
+    // their failures), PCIe, thermal/power, device memory, and
+    // workload-runtime failures surfaced from the device.
+    ERROR_CATEGORY_DEV      = 1;
+    // CONFIG_ERR — caller-fixable: invalid argument, permission, state
+    // violation, or misconfiguration.
+    ERROR_CATEGORY_CONFIG   = 2;
+    // INTERNAL_ERR — an unexpected internal daemon error, or an event this
+    // build cannot classify (e.g. a newer event a version mismatch introduced;
+    // not the device's fault, but we cannot categorize it, so it surfaces
+    // honestly as internal rather than masquerading as a device condition).
+    ERROR_CATEGORY_INTERNAL = 3;
+    // 4-15: reserved; do not reuse.
+    reserved 4 to 15;
+}
+
+// Application-level error detail.
+//
+// Conveys domain-specific error semantics that don't map cleanly to gRPC
+// native status codes. Empty (default) means success. Transport-level
+// errors (UNAVAILABLE, PERMISSION_DENIED, DEADLINE_EXCEEDED, etc.) are
+// delivered out-of-band via gRPC native status, not through this field.
+message ErrorDetail {
+    // Structured error code. 0 means success / no error. Non-zero values
+    // resolve, through a server-side table, to a fixed `{category, message}`
+    // pair. This is the FACT of the failure; the recommended action is not
+    // carried here (or anywhere on the wire) — see the enum note above.
+    int32 code = 1;
+    string message = 2;
+    // Coarse error kind, derived by the server from `code`.
+    ErrorCategory category = 3;
+    // Underlying OS errno when the failure originated from a system call
+    // (0 when not applicable). Retained alongside the structured `code` so
+    // the raw cause is not lost.
+    int32 os_errno = 5;
+    // 4: was `severity` — removed; do not reuse.
+    reserved 4;
+}
+
+// Stable handle to a single device.
+message DeviceRef {
+    // Device name (e.g. "rbln0").
+    string name = 1;
+}
+
+// Stable handle to a device group.
+message GroupRef {
+    int32 group_id = 1;
+}
+
+// Stable handle to a metric group.
+//
+// The reserved id "default" identifies a preregistered group covering every
+// device with the catalog's default metric subset. Clients can target it
+// without first calling CreateMetricGroup. Create / Delete on this id are
+// rejected with FAILED_PRECONDITION; Update is allowed for admin
+// adjustments to its metric_ids / sampling_policy.
+message MetricGroupRef {
+    string id = 1;
+}
+
+// Wrapper for a list of DeviceRef, used inside `oneof` selectors that
+// cannot host `repeated` fields directly.
+message DeviceRefList {
+    repeated DeviceRef devices = 1;
+}
+
+// Server-side device filter. Empty = all devices. Both selectors may be
+// supplied; the server takes the intersection.
+message DeviceFilter {
+    repeated DeviceRef devices = 1;
+    repeated GroupRef  groups  = 2;
+}
+
+// Per-entity outcome marker used to express partial failure in
+// responses. An empty `error` means the entity was handled
+// successfully. List responses carry these in a `unreachable` field for
+// entities the server could not retrieve; batch-Command responses
+// carry these in a `results` field for entities the command was
+// resolved over.
+//
+// `ref` is the stable identifier of the entity in the caller's frame
+// of reference: a device name like "rbln5", a group identifier like
+// "rsd0", or a metric-group id.
+message EntityStatus {
+    string ref = 1;
+    ErrorDetail error = 2;
+}
+
+// Driver-attach state machine — the daemon's relationship with the kernel
+// driver. Independent of per-device state.
+//
+//   ATTACHED   : daemon holds an active kernel-driver reference; the
+//                kernel module cannot be unloaded.
+//   DETACHING  : transition; daemon is releasing its kernel-driver
+//                reference and draining in-flight work.
+//   DETACHED   : daemon has released its kernel-driver reference; the
+//                kernel module can be unloaded.
+//   ATTACHING  : transition; daemon is acquiring a fresh kernel-driver
+//                reference and registering currently-discoverable
+//                devices.
+enum DriverState {
+    DRIVER_STATE_UNSPECIFIED = 0;
+    DRIVER_STATE_ATTACHED    = 1;
+    DRIVER_STATE_DETACHING   = 2;
+    DRIVER_STATE_DETACHED    = 3;
+    DRIVER_STATE_ATTACHING   = 4;
+}
+
+/*
+ * <pre><code>
+ * +====================================================================================+
+ * | Device State Machine Diagram                                                       |
+ * +====================================================================================+
+ * | [State Descriptions]                                                               |
+ * | 1. INIT   : device initialization in progress.                                     |
+ * | 2. READY  : device is initialized and available for use or currently in use.       |
+ * | 3. BUSY   : reset request is in progress.                                          |
+ * | 4. FAULT  : reset request failed or unexpected device error occurred.              |
+ * | 5. FINISH : device removal is in progress.                                         |
+ * +------------------------------------------------------------------------------------+
+ * | [State Diagram]                                                                    |
+ * |                                  ┌────────────┐                                    |
+ * |                                  │            │                                    |
+ * |                                  │    INIT    │                                    |
+ * |                                  │            │                                    |
+ * |                                  └─────┬──────┘                                    |
+ * |                                        │ (Init Complete)                           |
+ * |                                        ▼                                           |
+ * |           ┌────────────┐ (Dev    ┌────────────┐ (Remove  ┌────────────┐            |
+ * |           │            │ Fault)  │            │   Req)   │            │            |
+ * |           │   FAULT    │◀────────│   READY    │─────────▶│   FINISH   │            |
+ * |           │            │         │            │          │            │            |
+ * |           └───┬────────┘         └─────┬──────┘          └────────────┘            |
+ * |               │    ▲                   │  ▲                                        |
+ * |               │    │       (Reset Req) │  │ (Reset Succeed)                        |
+ * |               │    │                   │  │                                        |
+ * |               │    │(Reset Fail)       ▼  │                                        |
+ * |               │    │             ┌────────────┐                                    |
+ * |               │    └─────────────│            │                                    |
+ * |               │                  │    BUSY    │                                    |
+ * |               └─────────────────▶│            │                                    |
+ * |               (Reset Req)        └────────────┘                                    |
+ * +====================================================================================+
+ * </code></pre>
+ */
+enum DeviceState {
+    DEVICE_STATE_UNSPECIFIED = 0;
+    DEVICE_STATE_INIT        = 1;
+    DEVICE_STATE_READY       = 2;
+    DEVICE_STATE_BUSY        = 3;
+    DEVICE_STATE_FAULT       = 4;
+    DEVICE_STATE_FINISH      = 5;
+}
+
+// =====================================================================
+// InventoryService — static device identification
+// =====================================================================
+
+// Static device identification: device list, version stamps, hardware
+// spec, memory spec.
+service InventoryService {
+    // Returns a paginated list of known devices.
+    //
+    // Use `filter` to narrow the result set (e.g. only serviceable
+    // devices) and `detail` to select the inline telemetry view. The
+    // response always carries identification fields; `detail = FULL`
+    // requests the optional `DeviceTelemetry` inline view (see its field
+    // note — currently served via MetricService.SampleMetrics instead).
+    rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns firmware, kernel-driver, and SMC version stamps for the
+    // named device. These values are static for the lifetime of a boot.
+    rpc GetVersion(GetVersionRequest) returns (GetVersionResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns static hardware identification (board name, ASIC type,
+    // ...) for the named device. Dynamic factors such as temperature
+    // and power are reported through MetricService.
+    rpc GetHardware(GetHardwareRequest) returns (GetHardwareResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns the static memory specification (total capacity, in
+    // bytes) for the named device. Dynamic memory usage is reported
+    // through MetricService.
+    rpc GetMemorySpec(GetMemorySpecRequest) returns (GetMemorySpecResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+}
+
+// Filter for ListDevices.
+enum DeviceListFilter {
+    DEVICE_LIST_FILTER_UNSPECIFIED = 0;
+    // Return every device the daemon knows about.
+    DEVICE_LIST_FILTER_ALL         = 1;
+    // Return only devices currently fit to serve client workloads.
+    DEVICE_LIST_FILTER_SERVICEABLE = 2;
+}
+
+// Response detail level for ListDevices. SUMMARY returns identification
+// fields only; FULL additionally carries each device's static spec
+// (DeviceInfo.versions / hardware / memory), so a client listing devices
+// needs no per-device GetVersion / GetHardware / GetMemorySpec call.
+enum DeviceListDetail {
+    DEVICE_LIST_DETAIL_UNSPECIFIED = 0;
+    DEVICE_LIST_DETAIL_SUMMARY     = 1;
+    DEVICE_LIST_DETAIL_FULL        = 2;
+}
+
+message ListDevicesRequest {
+    // Default = ALL.
+    DeviceListFilter filter = 1;
+
+    // Default = SUMMARY.
+    DeviceListDetail detail = 2;
+
+    // Server default page_size = 100, max = 1000.
+    int32 page_size = 3;
+    string page_token = 4;
+}
+
+message DeviceInfo {
+    // Identification.
+    string name       = 1;
+    string dev_id     = 2;
+    string uuid       = 3;
+    string pci_bus_id = 4;
+    string card_name  = 5;
+
+    // Per-device lifecycle state. Always populated regardless of
+    // `detail`; serviceability filters and ResetDevice preconditions
+    // both read this field.
+    DeviceState state = 6;
+
+    // Stable 0-based ordinal assigned by the daemon across the usable-NPU
+    // set: every SR-IOV virtual function plus every physical function that
+    // is not itself hosting virtual functions. A physical function that
+    // currently hosts VFs is not a usable NPU and carries no `npu_id`, so
+    // the field is `optional` — unset means "not a usable NPU", never 0.
+    // Stable across a probe generation; tools share this id rather than
+    // numbering devices client-side. The set is ordered by PCI address, so
+    // this is the device index every rbln tool shows and takes as a bare
+    // number in `-d` (rbln-devsel `index_order`).
+    optional uint32 npu_id = 7;
+
+    // SR-IOV classification, determined by the daemon from the PCI `physfn`
+    // link (not the device name). `is_vf` is true for a virtual function;
+    // `parent_name` is its parent physical function's device name (e.g.
+    // "rbln0"), empty for a PF. Clients render these verbatim — they never
+    // re-derive PF/VF from the name.
+    bool is_vf = 8;
+    string parent_name = 9;
+
+    // Serial number of the board this function sits on, as the 16-digit
+    // lowercase hex string the driver reports (e.g. "0000000052628053").
+    // Identifies the board, not the function: every function on one card
+    // carries the same value — each NPU of a multi-NPU card, and every SR-IOV
+    // virtual function of a physical function — whereas `uuid` names the
+    // function itself. Empty when the board serial cannot be determined.
+    string serial_id = 10;
+
+    // The accel node of this function, as its `/dev/accel` name ("accel5"),
+    // so a client can resolve `-d accel5` against the daemon's devices and
+    // show the node. Empty when the function has no accel device.
+    string accel_node = 11;
+
+    // True when `uuid` is not this function's own but its parent PF's: a VF
+    // whose UUID was never provisioned reports none (all-zero), and shows the
+    // card's UUID for identification. A client must not select a function by
+    // an inherited UUID; a VF with a UUID of its own carries false.
+    bool uuid_inherited = 12;
+
+    // Static spec, populated only when `detail = FULL`: the values GetVersion,
+    // GetHardware and GetMemorySpec return for this device. Each is unset
+    // when the daemon has not resolved it yet — `memory` while the device is
+    // still probing, for one — where the matching Get call answers NOT_FOUND.
+    VersionInfo  versions = 13;
+    HardwareSpec hardware = 14;
+    MemorySpec   memory   = 15;
+
+    // Inline view of the device's dynamic telemetry. Not populated: obtain
+    // dynamic readings via MetricService.SampleMetrics(group="default"). The
+    // field keeps its number so it is never reused for another meaning.
+    DeviceTelemetry telemetry = 16;
+
+    // Reserved for future inline snapshots (e.g. health, custom groups)
+    // following the same set/unset semantics as `telemetry`.
+    reserved 17 to 31;
+}
+
+// Curated inline summary of a device's dynamic telemetry. Each field maps to
+// a `MetricId`, but this message is a fixed, curated subset — the default
+// MetricGroup's composition is owned by the server and may be a superset
+// (e.g. additional clocks). This message need not grow when that group does;
+// the authoritative, complete dynamic readings come from
+// MetricService.SampleMetrics(group="default").
+//
+// All metric fields are `optional` so the daemon can distinguish "measured
+// value" from "not available on this device right now" at the wire level
+// (e.g. attribute not exposed by the driver, SR-IOV VF, driver-detach
+// transient).
+// An unset field means the backing sample was absent; clients must not
+// interpret it as a zero reading. Always check presence
+// (`has_xxx()` / `Option::is_some`) before reading the scalar — a
+// present 0 (or negative, where signed) is a genuine measurement.
+message DeviceTelemetry {
+    // METRIC_ID_TEMPERATURE_MILLI_CELSIUS. Signed; cold-soak readings
+    // can be below zero, so "present 0" and "present negative" are both
+    // real measurements distinct from "unset" (no reading available).
+    optional int32  temperature_milli_celsius = 1;
+
+    // METRIC_ID_POWER_MICRO_WATT.
+    optional uint64 power_micro_watt          = 2;
+
+    // METRIC_ID_UTILIZATION_PERCENT_MILLI. 0..100000.
+    optional uint32 utilization_percent_milli = 3;
+
+    // METRIC_ID_MEMORY_USED_BYTES.
+    optional uint64 memory_used_bytes         = 4;
+
+    // METRIC_ID_PSTATE. DVFS performance-state ordinal, 0 = highest.
+    optional uint32 p_state                   = 5;
+
+    reserved 6 to 15;
+}
+
+message ListDevicesResponse {
+    repeated DeviceInfo items = 1;
+    string next_page_token = 2;
+    // Devices the daemon could not retrieve for this call.
+    repeated EntityStatus unreachable = 15;
+}
+
+message GetVersionRequest {
+    DeviceRef device = 1;
+}
+
+message GetVersionResponse {
+    string fw_version  = 1;
+    string drv_version = 2;
+    string smc_version = 3;
+}
+
+// Firmware, driver and SMC versions of a device, as GetVersionResponse
+// carries them; the shape DeviceInfo.versions takes.
+message VersionInfo {
+    string fw_version  = 1;
+    string drv_version = 2;
+    string smc_version = 3;
+}
+
+message GetHardwareRequest {
+    DeviceRef device = 1;
+}
+
+// Static hardware identification.
+message HardwareSpec {
+    string board_name = 1;
+    string asic_type  = 2;
+}
+
+message GetHardwareResponse {
+    HardwareSpec hardware = 1;
+}
+
+message GetMemorySpecRequest {
+    DeviceRef device = 1;
+}
+
+// Static memory capacity.
+message MemorySpec {
+    uint64 total_bytes = 1;
+}
+
+message GetMemorySpecResponse {
+    MemorySpec memory = 1;
+}
+
+// =====================================================================
+// MetricService — group-based dynamic measurement
+// =====================================================================
+
+// Globally unique metric identifier. Wire values are stable; new metrics
+// are added additively. Reserved ranges keep the catalog open for future
+// metric groups.
+enum MetricId {
+    METRIC_ID_UNSPECIFIED = 0;
+
+    // Per-device hardware-dynamic metrics.
+    METRIC_ID_TEMPERATURE_MILLI_CELSIUS = 100;
+    METRIC_ID_POWER_MICRO_WATT          = 101;
+
+    // Compute utilization.
+    METRIC_ID_UTILIZATION_PERCENT_MILLI = 200;
+
+    // Memory usage.
+    METRIC_ID_MEMORY_USED_BYTES = 300;
+
+    // Per-block clock frequencies.
+    METRIC_ID_CLOCK_CP_0_MHZ  = 400;
+    METRIC_ID_CLOCK_CP_1_MHZ  = 401;
+    METRIC_ID_CLOCK_DC_0_MHZ  = 402;
+    METRIC_ID_CLOCK_DC_1_MHZ  = 403;
+    METRIC_ID_CLOCK_BUS_MHZ   = 404;
+    METRIC_ID_CLOCK_SHM_MHZ   = 405;
+    METRIC_ID_CLOCK_DRAM_MHZ  = 406;
+
+    // DVFS performance state. Ordinal; 0 = highest performance.
+    METRIC_ID_PSTATE = 500;
+
+    // PCIe link of the function itself. Generations are numbered 1
+    // (2.5 GT/s) to 6 (64 GT/s); widths are lane counts. A link that
+    // retrains shows in the current pair. A VF has no link of its own and
+    // reports none of these.
+    METRIC_ID_PCIE_LINK_GEN               = 600;
+    METRIC_ID_PCIE_LINK_WIDTH             = 601;
+    METRIC_ID_PCIE_MAX_LINK_GEN           = 602;
+    METRIC_ID_PCIE_MAX_LINK_WIDTH         = 603;
+
+    reserved 1 to 99, 102 to 199, 201 to 299, 301 to 399, 407 to 499, 501 to 599, 604 to 999;
+    reserved "METRIC_ID_PCIE_MAX_PAYLOAD_BYTES", "METRIC_ID_PCIE_MAX_READ_REQUEST_BYTES";
+}
+
+// One entry in the metric catalog.
+message MetricDescriptor {
+    MetricId metric_id = 1;
+    string name        = 2;
+    reserved 3 to 15;
+}
+
+// Set of devices a metric group covers.
+message DeviceScope {
+    oneof selector {
+        DeviceRefList device_refs = 1;
+        GroupRef group_ref        = 2;
+        google.protobuf.Empty all = 3;
+    }
+}
+
+// Scheduled sampling parameters.
+message ScheduledSampling {
+    // Sampling interval in milliseconds. Must be > 0; the server rejects
+    // 0 with INVALID_ARGUMENT (frequency is mandatory for a scheduled
+    // policy, since the proto3 zero-default would otherwise leave the
+    // cadence undefined).
+    uint32 frequency_ms = 1;
+    // Maximum sample age in seconds. 0 = no age limit (rely on
+    // `keep_samples` cap only). Frequencies are still bounded; this only
+    // governs ring-buffer retention.
+    uint32 keep_age_s   = 2;
+    // Maximum sample count retained per metric. 0 = no count cap (rely
+    // on `keep_age_s` only).
+    uint32 keep_samples = 3;
+}
+
+// Sampling policy for a metric group. `on_demand` collects only when
+// SampleMetrics is called; `scheduled` samples in the background at
+// the configured cadence so that SampleMetrics returns the latest
+// cached snapshot without re-collection.
+message SamplingPolicy {
+    oneof mode {
+        google.protobuf.Empty on_demand = 1;
+        ScheduledSampling scheduled     = 2;
+    }
+}
+
+// A named composition of metrics, the devices they cover, and the
+// sampling policy applied to the group as a whole.
+message MetricGroup {
+    string id                      = 1;
+    string name                    = 2;
+    repeated MetricId metric_ids   = 3;
+    DeviceScope device_scope       = 4;
+    SamplingPolicy sampling_policy = 5;
+}
+
+// One sample of a single metric on a single device.
+//
+// The case of `typed_value` is determined by the metric's declared type
+// in `MetricDescriptor` (returned by ListSupportedMetrics), so clients
+// can resolve it at catalog-load time rather than per-sample.
+message MetricSample {
+    DeviceRef device   = 1;
+    MetricId metric_id = 2;
+    oneof typed_value {
+        // For counters / monotonic events / byte counts that exceed 2^53
+        // and lose precision in double.
+        int64 int_value    = 3;
+        // For ratios (utilization), temperatures, voltages, latencies,
+        // and any other continuous reading.
+        double float_value = 4;
+    }
+    reserved 5 to 15;
+}
+
+// Group-based dynamic-measurement service. Clients first declare which
+// metrics they care about (CreateMetricGroup) and then read the latest
+// values from the resulting group (SampleMetrics).
+service MetricService {
+    // Returns the metric catalog. If `device` is set, the result is
+    // narrowed to the metrics the named device supports.
+    rpc ListSupportedMetrics(ListSupportedMetricsRequest) returns (ListSupportedMetricsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Defines a new metric group with the supplied metric ids, device
+    // scope, and sampling policy. A `scheduled` sampling policy starts
+    // background collection immediately.
+    //
+    // Concurrency : serializes against other metric-group changes
+    //               (Create/Update/DeleteMetricGroup); a concurrent
+    //               metric-group change is rejected with ABORTED. Does not
+    //               contend with device Commands or with Queries (SampleMetrics
+    //               included).
+    rpc CreateMetricGroup(CreateMetricGroupRequest) returns (CreateMetricGroupResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Updates an existing group's metric ids, device scope, or sampling
+    // policy. Fields left at their default are unchanged.
+    //
+    // Concurrency : see CreateMetricGroup.
+    rpc UpdateMetricGroup(UpdateMetricGroupRequest) returns (UpdateMetricGroupResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Removes the named group. Any background collection it owns stops.
+    //
+    // Concurrency : see CreateMetricGroup.
+    rpc DeleteMetricGroup(DeleteMetricGroupRequest) returns (DeleteMetricGroupResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Returns a paginated list of currently-defined groups.
+    rpc ListMetricGroups(ListMetricGroupsRequest) returns (ListMetricGroupsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns the latest sample of every metric in the named group.
+    // For `scheduled` groups the response is served from the latest
+    // cached sample; for `on_demand` groups collection runs as part
+    // of the call.
+    rpc SampleMetrics(SampleMetricsRequest) returns (SampleMetricsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+}
+
+message ListSupportedMetricsRequest {
+    // Optional. Omit to return the global catalog.
+    DeviceRef device = 1;
+
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message ListSupportedMetricsResponse {
+    repeated MetricDescriptor metrics = 1;
+    string next_page_token = 2;
+    // Devices the daemon could not consult when computing the
+    // supported-metric subset (only meaningful when `device` was set
+    // on the request — empty for global catalog queries).
+    repeated EntityStatus unreachable = 15;
+}
+
+// Reserved id "default" is rejected with FAILED_PRECONDITION; that group
+// is preregistered at daemon init (see MetricGroupRef).
+message CreateMetricGroupRequest {
+    string name                    = 1;
+    repeated MetricId metric_ids   = 2;
+    DeviceScope device_scope       = 3;
+    SamplingPolicy sampling_policy = 4;
+
+    // Required. Client-generated UUIDv4 that doubles as the new group's stable
+    // id: a retry with the same key collides on the id and returns
+    // ALREADY_EXISTS (the standard idempotent-create signal). Unlike other
+    // Commands, an empty key is rejected with INVALID_ARGUMENT here — the key
+    // is the resource id, not just a dedup token.
+    string idempotency_key = 14;
+    // Client-generated UUIDv4 per call, recorded in the audit trail.
+    string request_id      = 15;
+}
+
+message CreateMetricGroupResponse {
+    MetricGroup group = 1;
+    // Server-recorded audit identifier.
+    string audit_id   = 2;
+}
+
+// Partial update following AIP-134. Replacement values for the fields
+// named in `update_mask` are taken from this message; fields not listed
+// in the mask are left untouched. Empty `update_mask` replaces every
+// updatable field (PUT semantics).
+//
+// To clear `metric_ids`, set `metric_ids = []` and include "metric_ids"
+// in the mask — without the mask entry, an empty list is treated as
+// "no change" rather than "clear".
+message UpdateMetricGroupRequest {
+    MetricGroupRef group = 1;
+
+    repeated MetricId metric_ids   = 2;
+    DeviceScope device_scope       = 3;
+    SamplingPolicy sampling_policy = 4;
+
+    // Field paths to apply from this request. Supports nested paths
+    // (e.g. "sampling_policy.scheduled.frequency_ms").
+    google.protobuf.FieldMask update_mask = 13;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response without re-applying the
+    // effect; a key reused for a different request is rejected with
+    // ALREADY_EXISTS. An empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message UpdateMetricGroupResponse {
+    MetricGroup group = 1;
+    string audit_id   = 2;
+}
+
+// Reserved id "default" is rejected with FAILED_PRECONDITION.
+message DeleteMetricGroupRequest {
+    MetricGroupRef group = 1;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response without re-applying the
+    // effect; a key reused for a different request is rejected with
+    // ALREADY_EXISTS. An empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message DeleteMetricGroupResponse {
+    string audit_id = 1;
+}
+
+message ListMetricGroupsRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+}
+
+message ListMetricGroupsResponse {
+    repeated MetricGroup items = 1;
+    string next_page_token = 2;
+    // Metric groups the daemon could not retrieve for this call.
+    repeated EntityStatus unreachable = 15;
+}
+
+message SampleMetricsRequest {
+    MetricGroupRef group = 1;
+}
+
+message SampleMetricsResponse {
+    repeated MetricSample samples = 1;
+    // Reserved for the snapshot timestamp.
+    reserved 2;
+    // Devices in the group's scope whose latest sample could not be
+    // produced for this call.
+    repeated EntityStatus unreachable = 15;
+}
+
+// =====================================================================
+// ControlService — device imperative actions
+// =====================================================================
+
+// Imperative device control: device recovery (reset) and SR-IOV
+// provisioning (virtual-function enable/disable).
+service ControlService {
+    // Resets the device(s) selected by `targets`.
+    //
+    // Operation type     : Command (state-mutating).
+    // State precondition : each target device must be in
+    //                      `DEVICE_STATE_READY` or `DEVICE_STATE_FAULT`.
+    // Privilege          : privileged tier (mTLS-authenticated client with
+    //                      privileged-allowlist membership) AND the daemon's
+    //                      `--allow-reset` boot-time consent. Reset is the
+    //                      most destructive single operation, so unlike other
+    //                      Commands its tier is NOT overridable per Service,
+    //                      and the `--allow-reset` gate always applies.
+    // Concurrency        : resets serialize per targeted device — resets of
+    //                      disjoint devices run concurrently, while a second
+    //                      reset that overlaps a device already resetting (the
+    //                      same device, or a group target sharing a member) is
+    //                      rejected with ABORTED. Queries are never blocked.
+    rpc ResetDevice(ResetDeviceRequest) returns (ResetDeviceResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Enables `num_vfs` SR-IOV virtual functions on each physical function
+    // selected by `targets`. If a PF cannot be enabled in place, the daemon
+    // re-initializes that PF to realize the VFs — invalidating existing device
+    // handles and any virtual functions already present on it. PFs that enable
+    // in place are not re-initialized.
+    //
+    // Operation type : Command (state-mutating).
+    // Privilege      : privileged tier. The `--allow-reset` gate does NOT
+    //                  apply; this Command's tier follows the normal,
+    //                  per-Service-overridable policy.
+    // Concurrency    : a bus-wide operation, so it serializes daemon-wide
+    //                  against every other Command; a concurrent Command is
+    //                  rejected with ABORTED. Queries are never blocked.
+    rpc EnableVfs(EnableVfsRequest) returns (EnableVfsResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Disables all SR-IOV virtual functions on each physical function
+    // selected by `targets`. Unlike EnableVfs this does not re-initialize
+    // the PF.
+    //
+    // Operation type : Command (state-mutating).
+    // Privilege      : privileged tier (see EnableVfs).
+    // Concurrency    : serializes daemon-wide (see EnableVfs).
+    rpc DisableVfs(DisableVfsRequest) returns (DisableVfsResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+}
+
+// Devices a reset request applies to. Reset must name an explicit target:
+// one device, a device list, or a device group. There is intentionally no
+// "all" selector — resetting an unbounded set has too large a blast radius,
+// and a device-group reset already covers multiple NPUs coherently.
+message ResetTargets {
+    oneof selector {
+        DeviceRef device      = 1;
+        DeviceRefList devices = 2;
+        GroupRef group        = 3;
+    }
+    // 4 was `google.protobuf.Empty all`; removed — see message comment.
+    reserved 4;
+}
+
+message ResetDeviceRequest {
+    ResetTargets targets = 1;
+    // Maximum time to wait for the reset to complete, in seconds.
+    // 0 means wait without bound.
+    uint32 timeout_seconds = 2;
+
+    // Reset even when the target still has live execution contexts. The
+    // default (false) refuses to reset a device or group that has an active
+    // context — pulling the device out from under a running workload (or
+    // resetting one member of a coupled multi-device job) is destructive —
+    // and reports the refusal per entity. Set true to override for recovery
+    // of a wedged context. The matching reset unit for a workload is the unit
+    // its jobs were submitted at: a per-device job → reset that device; an
+    // RSD-group (multi-device) job → reset that group.
+    bool force = 3;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response — including any per-device
+    // partial results — without re-resetting devices that already succeeded; a
+    // key reused for a different request is rejected with ALREADY_EXISTS. An
+    // empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message ResetDeviceResponse {
+    string audit_id = 1;
+    // One entry per device the command resolved over. `error` empty
+    // means that device was reset successfully.
+    repeated EntityStatus results = 15;
+}
+
+// Physical functions a VF operation applies to. `all` selects every
+// SR-IOV-capable physical function the daemon can see.
+message VfTargets {
+    oneof selector {
+        DeviceRef device          = 1;
+        DeviceRefList devices     = 2;
+        google.protobuf.Empty all = 3;
+    }
+}
+
+message EnableVfsRequest {
+    VfTargets targets = 1;
+    // Number of virtual functions to create on each selected physical
+    // function. Must be one of 1, 2, or 4; other values are rejected.
+    uint32 num_vfs = 2;
+    // Maximum time to wait, per PF, for the PF to re-initialize and its
+    // virtual functions to appear, in seconds. 0 selects the daemon default
+    // (currently 300s). The wait is never truly unbounded: the daemon serves
+    // one request at a time, so an indefinite wait on a PF that never
+    // re-probes would block every subsequent request.
+    uint32 timeout_seconds = 3;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response — including any per-PF
+    // partial results — without re-enabling VFs on PFs that already succeeded; a
+    // key reused for a different request is rejected with ALREADY_EXISTS. An
+    // empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message EnableVfsResponse {
+    string audit_id = 1;
+    // One entry per physical function the command resolved over. Empty
+    // `error` means VFs were enabled on that PF successfully.
+    repeated EntityStatus results = 15;
+}
+
+message DisableVfsRequest {
+    VfTargets targets = 1;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response — including any per-PF
+    // partial results — without re-disabling VFs on PFs that already succeeded; a
+    // key reused for a different request is rejected with ALREADY_EXISTS. An
+    // empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message DisableVfsResponse {
+    string audit_id = 1;
+    // One entry per physical function the command resolved over. Empty
+    // `error` means VFs were disabled on that PF successfully.
+    repeated EntityStatus results = 15;
+}
+
+// =====================================================================
+// JournalService — historical record retrieval (events + coredumps)
+// =====================================================================
+
+// Read-only retrieval of a device's historical records: the firmware/driver
+// event log and the coredump files captured on it. Pure record browsing —
+// it does not run any active health test or device probe.
+service JournalService {
+    // Returns historical events for the filtered device set, paginated.
+    rpc GetEventHistory(GetEventHistoryRequest) returns (GetEventHistoryResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns coredump files for the filtered device set, paginated.
+    rpc ListCoredumps(ListCoredumpsRequest) returns (ListCoredumpsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+}
+
+message GetEventHistoryRequest {
+    DeviceFilter filter = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message EventInfo {
+    // Device name (e.g. "rbln0").
+    string dev_name    = 1;
+    int32 event_type   = 2;
+    int32 value        = 3;
+    int32 sub_value    = 4;
+    // Kernel uptime at which the event fired.
+    double kernel_time = 5;
+    // Wall-clock time at event capture, derived from boot wall-clock
+    // plus kernel_time. ISO-8601, naive (no timezone offset). Treat as
+    // a best-effort reference, not an authoritative UTC value.
+    string wall_time   = 6;
+    // Structured classification of this event, derived by the server from
+    // the raw (value, sub_value) above. `code` is 0 for events that carry
+    // no fault semantics (e.g. device-ready). The same code space is used
+    // by ErrorDetail, so async events and synchronous op failures share
+    // one vocabulary. This is the FACT of the event; recommended action is
+    // not carried on the journal (a long-lived record) — a transient that
+    // has since recovered must not accrue a stale prescription. The customer
+    // runs a diagnostic to obtain time-pinned action.
+    int32 code             = 7;
+    ErrorCategory category = 8;
+    // 9: was `severity` — removed; do not reuse.
+    reserved 9;
+    // The trigger reason of a COREDUMP event (MANUAL / RESET / RESET_FAIL /
+    // PCIE_ERROR / …) is not a separate field — it is decoded from
+    // `sub_value` (high 16 bits). Clients render it alongside `category`.
+}
+
+message GetEventHistoryResponse {
+    repeated EventInfo events = 1;
+    string next_page_token = 2;
+    // Devices in the filter the daemon could not retrieve event history for.
+    // Describes the whole filtered set, not this page; populated on the first
+    // page (empty page_token) only, so a client paging through results does
+    // not double-count it.
+    repeated EntityStatus unreachable = 15;
+}
+
+message ListCoredumpsRequest {
+    DeviceFilter filter = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message CoredumpEntry {
+    string device_name   = 1;
+    // Directory-name token (YYYYMMDD_HHMMSS) parsed from the coredump
+    // directory name. Wall-clock at write time, no timezone offset.
+    // The `_<n>` the daemon appends to a later dump of the same device
+    // within the same second is not part of it, so two entries can share
+    // this value; `path` tells them apart.
+    // Prefer `timestamp_utc` (field 6) when available; this field is
+    // retained for v0/v1 dumps whose header lacks a wall-clock entry.
+    string timestamp     = 2;
+    string path          = 3;
+    // Situation tag from the coredump header (e.g. "RESET", "MANUAL").
+    string situation     = 4;
+    // Coredump header version.
+    uint32 version       = 5;
+    // ISO-8601 UTC timestamp from the coredump header (v2+).
+    string timestamp_utc = 6;
+    // ASIC type id from the coredump header; 0 if unavailable.
+    uint32 asic_type     = 7;
+}
+
+message ListCoredumpsResponse {
+    repeated CoredumpEntry entries = 1;
+    string next_page_token = 2;
+    // Devices in the filter the daemon could not list coredumps for. As with
+    // GetEventHistory, this describes the whole filtered set and is populated
+    // on the first page (empty page_token) only.
+    repeated EntityStatus unreachable = 15;
+}
+
+// =====================================================================
+// GroupService — device group CRUD
+// =====================================================================
+
+// Device group management.
+service GroupService {
+    // Returns the set of active groups and their member devices.
+    rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Creates a group with the given id and member devices. The group
+    // id must not already exist; every named device must be present.
+    //
+    // Concurrency : serializes against Commands touching any of the member
+    //               devices; a conflict on a shared device is rejected with
+    //               ABORTED. Queries are never blocked.
+    rpc CreateGroup(CreateGroupRequest) returns (CreateGroupResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Deletes one group or every group depending on which selector case
+    // the caller sets.
+    //
+    // Concurrency : like CreateGroup, serializes against Commands on the
+    //               group's member devices. Deleting every group — or a group
+    //               whose members the daemon cannot resolve — serializes
+    //               daemon-wide instead. Conflicts are rejected with ABORTED.
+    rpc DeleteGroup(DeleteGroupRequest) returns (DeleteGroupResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+}
+
+message GroupEntry {
+    int32 group_id = 1;
+    // System-derived from `group_id` (currently formatted as
+    // "rsd<group_id>"). Not settable at creation time.
+    string group_name = 2;
+    // Member devices, in this group's stable order. A device's group-local
+    // ordinal (its 0-based position within the group) is intentionally not a
+    // separate field: clients derive it from this ordering together with
+    // `DeviceInfo.npu_id`. A dedicated field may be added later if a
+    // daemon-authoritative ordinal is ever needed.
+    repeated DeviceRef devices = 3;
+}
+
+message ListGroupsRequest {
+    int32 page_size = 1;
+    string page_token = 2;
+}
+
+message ListGroupsResponse {
+    repeated GroupEntry items = 1;
+    string next_page_token = 2;
+    // Groups the daemon could not retrieve for this call.
+    repeated EntityStatus unreachable = 15;
+}
+
+message CreateGroupRequest {
+    int32 group_id = 1;
+    repeated DeviceRef devices = 2;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response without re-applying the
+    // effect; a key reused for a different request is rejected with
+    // ALREADY_EXISTS. An empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message CreateGroupResponse {
+    string audit_id = 1;
+    // One entry per member device the command considered. `error`
+    // empty means that device was added successfully.
+    repeated EntityStatus results = 15;
+}
+
+message DeleteGroupRequest {
+    oneof selector {
+        // Delete one specific group.
+        int32 group_id            = 1;
+        // Delete every group.
+        google.protobuf.Empty all = 2;
+    }
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response without re-applying the
+    // effect; a key reused for a different request is rejected with
+    // ALREADY_EXISTS. An empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message DeleteGroupResponse {
+    string audit_id = 1;
+    // One entry per group the command resolved over (multiple when
+    // `selector = all`). `error` empty means that group was deleted
+    // successfully.
+    repeated EntityStatus results = 15;
+}
+
+// =====================================================================
+// TopologyService — NUMA / CPU / PCIe topology
+// =====================================================================
+
+// Static interconnect topology.
+service TopologyService {
+    // Returns NUMA node, CPU affinity, group membership, and PCIe link
+    // parameters for each device in the filter.
+    rpc ListTopology(ListTopologyRequest) returns (ListTopologyResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+}
+
+message TopologyEntry {
+    string device_name     = 1;
+    string pci_bus_id      = 2;
+    int32 numa_node        = 3;
+    string local_cpulist   = 4;
+    string rsd_group       = 5;
+    string pcie_link_speed = 6;
+    string pcie_link_width = 7;
+}
+
+message ListTopologyRequest {
+    DeviceFilter filter = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message ListTopologyResponse {
+    repeated TopologyEntry entries = 1;
+    string next_page_token = 2;
+    // Devices in the filter the daemon could not read topology for.
+    repeated EntityStatus unreachable = 15;
+}
+
+// =====================================================================
+// ConfigService — daemon-level configuration
+// =====================================================================
+
+// Daemon runtime configuration service.
+//
+// Manages daemon-level state, including the daemon's relationship with
+// the kernel driver via DetachDriver / AttachDriver. This service does
+// not manage device hardware policy (clock, power cap, ECC, etc.) —
+// those concerns belong to a separate device-policy service.
+service ConfigService {
+    // Lists every daemon runtime config key with its current value and the
+    // metadata a caller needs to present or pre-validate it: value type,
+    // default, accepted range, and whether the key is writable.
+    //
+    // The key set is owned by the daemon, so a client renders what this RPC
+    // returns instead of carrying its own list of keys.
+    rpc ListConfig(ListConfigRequest) returns (ListConfigResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns the daemon runtime config value for the given key.
+    rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Sets a daemon runtime config value.
+    //
+    // Operation type     : Command (state-mutating).
+    // Privilege          : privileged tier. As the RPC that administers
+    //                      authorization policy itself, ConfigService's tier
+    //                      is always Privileged and cannot be lowered by a
+    //                      per-Service override (recursion guard).
+    // Concurrency        : daemon-local — touches no device or driver state,
+    //                      so it does not serialize against other operations
+    //                      and is never rejected for contention.
+    rpc SetConfig(SetConfigRequest) returns (SetConfigResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Detach the daemon from the kernel driver.
+    //
+    // Releases the daemon's kernel-driver reference, allowing the kernel
+    // module to be unloaded. The daemon process itself stays alive —
+    // gRPC sessions, authentication state, and configuration are
+    // preserved.
+    //
+    // Operation type     : Command (state-mutating).
+    // Wait policy        : `timeout_seconds`. 0 means wait without bound.
+    // State precondition : DRIVER_STATE_ATTACHED. Returns
+    //                      FAILED_PRECONDITION otherwise.
+    // Privilege          : privileged tier (mTLS-authenticated client
+    //                      with privileged-allowlist membership).
+    // Status codes       : OK on success.
+    //                      FAILED_PRECONDITION — state not ATTACHED, or
+    //                          state was ATTACHED at entry but the
+    //                          daemon entered shutdown before finalising
+    //                          the transition.
+    //                      DEADLINE_EXCEEDED — `timeout_seconds` elapsed
+    //                          before the detach completed; the handle is
+    //                          preserved, so a follow-up call can resume
+    //                          waiting.
+    //                      UNAVAILABLE — daemon is on its shutdown path;
+    //                          no further detach is accepted.
+    //                      INTERNAL — the detach operation failed
+    //                          unexpectedly.
+    //                      For non-OK paths the response body is not
+    //                      delivered; the observed `DriverState` is
+    //                      conveyed via metadata
+    //                      `x-rsmd-driver-state-after`.
+    // Concurrency        : a driver-stack change under every device, so it
+    //                      serializes daemon-wide against every other Command;
+    //                      a concurrent Command is rejected with ABORTED.
+    //                      Queries are never blocked.
+    rpc DetachDriver(DetachDriverRequest) returns (DetachDriverResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Re-attach the daemon to the kernel driver.
+    //
+    // Re-acquires a kernel-driver reference and registers all currently-
+    // discoverable devices. Use after DetachDriver to resume normal
+    // device interaction.
+    //
+    // Operation type     : Command (state-mutating).
+    // Wait policy        : `timeout_seconds` is accepted for forward-
+    //                      compatibility but NOT YET ENFORCED — the
+    //                      server returns immediately after initiating
+    //                      the attach, before the kernel driver is
+    //                      necessarily reachable. A future revision
+    //                      will introduce explicit readiness signalling
+    //                      and honour this timeout. Until then,
+    //                      DEADLINE_EXCEEDED is not produced by this
+    //                      RPC.
+    // State precondition : DRIVER_STATE_DETACHED. Returns
+    //                      FAILED_PRECONDITION otherwise.
+    // Privilege          : privileged tier (mTLS-authenticated client
+    //                      with privileged-allowlist membership).
+    // Status codes       : OK on success.
+    //                      FAILED_PRECONDITION — state not DETACHED.
+    //                      UNAVAILABLE — daemon is on its shutdown
+    //                          path; the master event sender has been
+    //                          dropped, so attach cannot honour its
+    //                          readiness contract.
+    //                      INTERNAL — the attach operation could not be
+    //                          started.
+    //                      For non-OK paths the response body is not
+    //                      delivered; the observed `DriverState` is
+    //                      conveyed via metadata
+    //                      `x-rsmd-driver-state-after`.
+    // Concurrency        : serializes daemon-wide (see DetachDriver).
+    rpc AttachDriver(AttachDriverRequest) returns (AttachDriverResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+}
+
+// Value domain of a config key. Lets a caller render and pre-validate an
+// entry without hard-coding per-key knowledge.
+enum ConfigValueType {
+    CONFIG_VALUE_TYPE_UNSPECIFIED = 0;
+    // Decimal integer. `min` / `max` on the entry bound what SetConfig
+    // accepts.
+    CONFIG_VALUE_TYPE_INT = 1;
+    // Free-form string.
+    CONFIG_VALUE_TYPE_STRING = 2;
+}
+
+// One runtime config key: its live value plus the metadata describing what
+// the key accepts.
+message ConfigEntry {
+    // 1-based selector the daemon assigns over the writable keys, in listing
+    // order. 0 for a key SetConfig refuses, which carries no selector.
+    //
+    // It is a presentation aid for interactive use, stable only for a given
+    // daemon build: GetConfig and SetConfig address keys by `key`, and a
+    // caller that stores or scripts a reference should store `key` too.
+    uint32 index = 1;
+
+    // Wire name of the key, as accepted by GetConfig / SetConfig.
+    string key = 2;
+
+    // Current value, in the same string form GetConfig returns.
+    string value = 3;
+
+    ConfigValueType type = 4;
+
+    // Value the daemon starts from when neither the environment nor a
+    // runtime SetConfig has moved the key. Empty when the key has none.
+    string default_value = 5;
+
+    // Inclusive bounds SetConfig accepts for an integer key. Both unset when
+    // the key takes no range (non-integer, or not writable).
+    optional int64 min = 6;
+    optional int64 max = 7;
+
+    // False for a key SetConfig refuses (FAILED_PRECONDITION).
+    bool writable = 8;
+
+    // One-line summary of what the key controls.
+    string description = 9;
+}
+
+message ListConfigRequest {}
+
+message ListConfigResponse {
+    // Every key the daemon exposes, in its canonical order — the order the
+    // `index` selectors are assigned over.
+    repeated ConfigEntry entries = 1;
+}
+
+message GetConfigRequest {
+    string key = 1;
+}
+
+message GetConfigResponse {
+    string key   = 1;
+    string value = 2;
+}
+
+message SetConfigRequest {
+    string key   = 1;
+    string value = 2;
+
+    // Optional. Client-generated UUIDv4 for retry-safe idempotency: a retry
+    // carrying the same key replays the first response without re-applying the
+    // effect; a key reused for a different request is rejected with
+    // ALREADY_EXISTS. An empty key disables dedup for this call.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message SetConfigResponse {
+    string audit_id = 1;
+}
+
+message DetachDriverRequest {
+    // Maximum time to wait for the detach to complete. 0 means wait
+    // without bound. Otherwise the server returns DEADLINE_EXCEEDED if
+    // the operation has not finished within this many seconds.
+    uint32 timeout_seconds = 1;
+}
+
+message DetachDriverResponse {
+    // Application-level error detail. Empty (default) means success.
+    // gRPC native status (FAILED_PRECONDITION, DEADLINE_EXCEEDED, etc.)
+    // is delivered out-of-band; on those failure paths the response
+    // body is not produced.
+    ErrorDetail error = 15;
+
+    // Driver state observed when this response was constructed. On
+    // success this is always DETACHED. For failure paths the body is
+    // not delivered (see comment above) — the server surfaces the
+    // observed state via gRPC metadata header
+    // `x-rsmd-driver-state-after` (decimal-encoded `DriverState` int).
+    DriverState state_after = 1;
+}
+
+message AttachDriverRequest {
+    // Maximum time to wait for the attach to complete. 0 means wait
+    // without bound. Currently NOT YET ENFORCED (see AttachDriver
+    // docstring) — the server returns immediately after initiating the
+    // attach. A future revision will introduce explicit readiness
+    // signalling and honour this timeout.
+    uint32 timeout_seconds = 1;
+}
+
+message AttachDriverResponse {
+    ErrorDetail error = 15;
+
+    // Driver state observed when this response was constructed. On
+    // success this is always ATTACHED. For failure paths the body is
+    // not delivered — the server surfaces the observed state via gRPC
+    // metadata header `x-rsmd-driver-state-after` (decimal-encoded
+    // `DriverState` int).
+    DriverState state_after = 1;
+}
+
+// =====================================================================
+// DiagnosticService — on-demand active hardware validation
+// =====================================================================
+
+// Runs on-demand hardware validation diagnostics against the selected
+// devices and returns structured PASS/FAIL/SKIP results. A run covers either
+// a coverage level (DiagnosticLevel) or tests named one by one
+// (DiagnosticTestId).
+//
+// Diagnostics drive the device under load and can run for minutes, so the
+// service is asynchronous: RequestDiagnostic starts a run and returns a job
+// handle immediately; the caller polls GetDiagnosticResult until the run
+// reaches a terminal state; CancelDiagnostic stops an in-flight run. A run
+// holds the daemon exclusively for its duration — while one is in flight no
+// device can be reset or otherwise mutated and no second diagnostic can
+// start; a conflicting request is rejected rather than queued.
+service DiagnosticService {
+    // Starts a diagnostic run on the selected devices and returns a job
+    // handle. Non-blocking — the run proceeds in the background.
+    //
+    // Operation type     : Command (state-mutating — holds the daemon
+    //                      exclusively while the run drives the device(s)
+    //                      under load).
+    // Privilege          : privileged tier.
+    // State precondition : no other state-mutating operation may be in
+    //                      flight; a conflict returns ABORTED.
+    // Concurrency        : holds the daemon exclusively for the run, so it
+    //                      serializes daemon-wide against every other Command
+    //                      and diagnostic. Queries are never blocked.
+    rpc RequestDiagnostic(RequestDiagnosticRequest) returns (RequestDiagnosticResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+
+    // Returns the current lifecycle state of a run, plus the full report
+    // once it reaches DONE. Intended to be polled until a terminal state.
+    rpc GetDiagnosticResult(GetDiagnosticResultRequest) returns (GetDiagnosticResultResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Requests cancellation of the currently-running diagnostic. At most one
+    // run is ever active (a run holds the whole daemon exclusively), so the
+    // request needs no job identifier — it cancels whatever is in flight.
+    // Idempotent: succeeds with no effect when nothing is running.
+    //
+    // Concurrency : signals the in-flight run to stop; it takes no exclusive
+    //               hold of its own and is never rejected for contention.
+    rpc CancelDiagnostic(CancelDiagnosticRequest) returns (CancelDiagnosticResponse) {
+        option (rpc_type) = RPC_TYPE_COMMAND;
+    }
+}
+
+// Diagnostic coverage level. A level runs every test up to and including
+// itself (L2 includes L1).
+enum DiagnosticLevel {
+    DIAGNOSTIC_LEVEL_UNSPECIFIED = 0;
+    // Software integrity + hardware presence. Host-wide: always evaluates
+    // the full device set.
+    DIAGNOSTIC_LEVEL_L1 = 1;
+    // L1 plus PCIe bandwidth, NPU memory, and memory bandwidth.
+    DIAGNOSTIC_LEVEL_L2 = 2;
+}
+
+// A test a run names on its own, outside the coverage levels.
+enum DiagnosticTestId {
+    DIAGNOSTIC_TEST_ID_UNSPECIFIED = 0;
+    // Transfer bandwidth host to device, device to device and device to host,
+    // and device-to-device sync latency, across the devices of a device
+    // group. Runs on whole groups: `group`, or `all` for every group in turn.
+    // Reported once per group, as a DiagnosticTest named "transfer" carrying
+    // `transfer`.
+    DIAGNOSTIC_TEST_ID_TRANSFER = 1;
+}
+
+// Devices a diagnostic run applies to.
+//
+// Device selection applies to L2 tests only. L1 tests are host-wide and
+// always evaluate the full device set, so a `device`/`devices` selector is
+// rejected together with DIAGNOSTIC_LEVEL_L1; use `all` (or leave the
+// selector empty) for an L1 run.
+//
+// A `group` selector applies to DIAGNOSTIC_TEST_ID_TRANSFER only, which in
+// turn takes only `group` or `all` (or an empty selector): a level with
+// `group`, or the transfer test with `device`/`devices`, is rejected.
+message DiagnosticTargets {
+    oneof selector {
+        DeviceRef device          = 1;
+        DeviceRefList devices     = 2;
+        google.protobuf.Empty all = 3;
+        GroupRef group            = 4;
+    }
+}
+
+message RequestDiagnosticRequest {
+    DiagnosticTargets targets = 1;
+    // The coverage level to run. Exactly one of `level` and `tests` is set;
+    // both, or neither, is rejected.
+    DiagnosticLevel level     = 2;
+    // Maximum time to wait for the run to complete, in seconds. 0 selects
+    // the daemon default; a value above the daemon maximum is clamped to it.
+    // On expiry the run is cancelled and reported as terminated (CANCELLED).
+    uint32 timeout_seconds = 3;
+    // The tests to run, by name, in place of `level`. A test named twice runs
+    // once; DIAGNOSTIC_TEST_ID_UNSPECIFIED or an unknown value is rejected.
+    repeated DiagnosticTestId tests = 4;
+    // Parameters of DIAGNOSTIC_TEST_ID_TRANSFER; read only when `tests`
+    // names it.
+    TransferParams transfer = 5;
+
+    // Optional. When set, a retried RequestDiagnostic carrying the same key
+    // returns the existing run's job handle instead of starting a second run
+    // (or being rejected as a conflict) — so a client that lost the original
+    // response can recover the job handle by resending with the same key. The
+    // association is retained for a bounded number of recent runs.
+    string idempotency_key = 14;
+    string request_id      = 15;
+}
+
+message TransferParams {
+    // Measurement rounds of each transfer and each device pair. 0 selects
+    // one round.
+    uint32 iterations = 1;
+}
+
+message RequestDiagnosticResponse {
+    // Opaque handle identifying the started run, passed to
+    // GetDiagnosticResult / CancelDiagnostic.
+    string job_id = 1;
+}
+
+message GetDiagnosticResultRequest {
+    string job_id = 1;
+}
+
+message GetDiagnosticResultResponse {
+    // Lifecycle state of a diagnostic run.
+    enum State {
+        STATE_UNSPECIFIED = 0;
+        // Accepted, not yet started.
+        PENDING = 1;
+        // Running.
+        RUNNING = 2;
+        // Finished; `report` carries the results.
+        DONE = 3;
+        // Could not run, exited abnormally, or produced no parseable
+        // report; `error` is set.
+        FAILED = 4;
+        // Cancelled before completion (explicit cancel or timeout).
+        CANCELLED = 5;
+    }
+    State state = 1;
+
+    // Populated in DONE (the full run), and may also be populated in
+    // FAILED/CANCELLED with a *partial* report — the devices that completed
+    // before a multi-device run exited early, or, for the transfer test, the
+    // groups that completed and what the group in progress had measured.
+    DiagnosticReport report = 2;
+
+    // Populated only in FAILED — the run could not start, the tool exited
+    // abnormally, or its output could not be parsed. A per-test failure is
+    // NOT an error here: it is reported as DONE with that test's `result`
+    // set to "FAIL" inside `report`.
+    ErrorDetail error = 15;
+}
+
+// Cancels the currently-running diagnostic; carries no job identifier because
+// at most one run is ever active (see the RPC comment).
+message CancelDiagnosticRequest {}
+
+message CancelDiagnosticResponse {
+    // True if a run was in flight and has been signalled to stop; false if
+    // nothing was running. Cancellation is idempotent, so "nothing running" is
+    // a success, not an error, for the caller. To confirm the run actually
+    // reached CANCELLED, poll GetDiagnosticResult with the job_id from
+    // RequestDiagnostic.
+    bool accepted = 1;
+}
+
+// Structured diagnostic results.
+message DiagnosticReport {
+    // Version of the diagnostic report schema, fixing the output contract
+    // between the daemon and the validation backend. Empty for a run of
+    // named tests.
+    string schema_version = 1;
+    // One entry per test that ran.
+    repeated DiagnosticTest tests = 2;
+}
+
+message DiagnosticTest {
+    // Test identifier, e.g. "pcie_bandwidth".
+    string name = 1;
+    // The level the test belongs to; DIAGNOSTIC_LEVEL_UNSPECIFIED for a test
+    // run by name.
+    DiagnosticLevel level = 2;
+    // Overall test verdict: "PASS", "FAIL", or "SKIP". Empty for a test cut
+    // short in a CANCELLED or FAILED run, whose `transfer` then holds what
+    // was measured before the cut.
+    string result = 3;
+    // Per-check sub-results within the test.
+    repeated DiagnosticCheck checks = 4;
+    // Human-readable test duration, when reported (e.g. "23.38 seconds").
+    string duration = 5;
+    // Set for DIAGNOSTIC_TEST_ID_TRANSFER: what it measured on one group.
+    TransferResult transfer = 6;
+}
+
+// The transfer test's measurements on one device group. A bandwidth is in
+// GB/s (10^9 bytes per second), a latency in microseconds.
+message TransferResult {
+    GroupRef group = 1;
+    // Bytes each transfer moves.
+    uint64 transfer_bytes = 2;
+    // One per transfer measured, by its two ends.
+    repeated TransferBandwidth bandwidth = 3;
+    // One per device pair measured.
+    repeated TransferLatency latency = 4;
+}
+
+// One end of a transfer: host memory, or a device.
+message TransferEndpoint {
+    oneof endpoint {
+        google.protobuf.Empty host = 1;
+        DeviceRef device           = 2;
+    }
+}
+
+message TransferBandwidth {
+    TransferEndpoint source      = 1;
+    TransferEndpoint destination = 2;
+    // Over the `samples` rounds measured.
+    double max_gb_per_sec = 3;
+    double min_gb_per_sec = 4;
+    double avg_gb_per_sec = 5;
+    uint32 samples        = 6;
+}
+
+message TransferLatency {
+    // The two devices of the pair, either way round.
+    DeviceRef device_a = 1;
+    DeviceRef device_b = 2;
+    // The shortest sync round between the pair.
+    double latency_us = 3;
+}
+
+message DiagnosticCheck {
+    // Check identifier, e.g. "P2P Connectivity".
+    string name = 1;
+    // Check outcome — "PASS"/"FAIL"/"SKIP", or a measured value rendered
+    // as text (e.g. a device count).
+    string status = 2;
+}
+
+// =====================================================================
+// WorkloadService — who is occupying the NPUs right now
+// =====================================================================
+
+// Live, read-only observation of device occupancy: the host processes
+// running on the NPUs and the individual execution contexts they hold.
+// Pure correlation over data the daemon already reads — the per-device
+// context inventory joined to host `/proc` metadata and RSD group
+// membership. It measures nothing itself; scalar telemetry (temperature,
+// power, device-wide utilization) stays with MetricService, and static
+// identification with InventoryService.
+//
+// Two lenses on the same graph: `ListWorkloads` rolls contexts up to the
+// owning process (the operator's mental model), `ListContexts` lists the
+// individual contexts (the kernel-native unit) for drill-down.
+service WorkloadService {
+    // Returns the per-process workload rollup for the filtered device set,
+    // paginated. One row per owning process.
+    rpc ListWorkloads(ListWorkloadsRequest) returns (ListWorkloadsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+
+    // Returns the individual execution contexts for the filtered device set,
+    // paginated. One row per context.
+    rpc ListContexts(ListContextsRequest) returns (ListContextsResponse) {
+        option (rpc_type) = RPC_TYPE_QUERY;
+    }
+}
+
+message ListWorkloadsRequest {
+    DeviceFilter filter = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+// One host process's occupancy of a single device — its contexts on that
+// device rolled up (count, memory, utilization). A process spanning multiple
+// devices produces one row per device (so per-device pools are never mixed),
+// matching the nvidia-smi `(device, PID)` process view. Anchored on the process
+// id the kernel reports for each context; `/proc`-sourced fields are
+// best-effort and left unset when the process has already exited.
+message WorkloadInfo {
+    // Owning thread id — the kernel's per-context task id (`task_pid_vnr`, what
+    // userspace calls a tid). Always present; it is the identity the kernel
+    // reports for each context.
+    uint32 tid = 1;
+    // OS process id (`getpid` / thread-group id) the owning thread belongs to,
+    // from `/proc/<tid>/status`. Unset when `/proc` could not be read (e.g. the
+    // thread already exited).
+    optional uint32 pid = 2;
+    // Process name from `/proc/<tid>/comm`; empty when unresolved.
+    string process_name = 3;
+    // Real user id from `/proc/<tid>/status`; unset when unresolved.
+    optional uint32 uid = 4;
+    // Thread start time (clock ticks since boot) from `/proc/<tid>/stat`.
+    // Surfaced so a client can detect tid reuse between the kernel read and
+    // the `/proc` read; unset when unresolved.
+    optional uint64 start_time_ticks = 5;
+    // "" when the owning thread was resolved live; "EXIT" when `/proc` was gone
+    // (thread already exited), "ZOMB" when it was a zombie.
+    string liveness = 6;
+    // The device this row is scoped to. A thread spanning N devices yields N
+    // rows (same tid, different device) — the metrics below never mix pools
+    // from different physical devices. Rows are ordered by (tid, device), so a
+    // client renders them by visually merging the identity columns per tid.
+    string device = 7;
+    // RSD group ids this device belongs to (empty when it is not grouped).
+    repeated int32 groups = 8;
+    // Number of contexts this process holds on this device.
+    uint32 context_count = 9;
+    // Device memory this process holds on this device, bytes (summed over its
+    // contexts there).
+    uint64 memory_bytes = 10;
+    // Utilization summed over this process's contexts on this device,
+    // percent-milli (rounded to an integer). Being a per-device sum it is not
+    // bounded by a single context's 100000 ceiling: `context_count` busy
+    // contexts can report up to `context_count * 100000` — hence `uint64`
+    // (vs the per-context `uint32`) to stay overflow-safe. Unset when no
+    // context reported a reading (platform-dependent).
+    optional uint64 utilization_percent_milli = 11;
+    // Whether any of this process's contexts on this device is currently
+    // running (submitted sequence ahead of completed sequence).
+    bool running = 12;
+}
+
+message ListWorkloadsResponse {
+    repeated WorkloadInfo workloads = 1;
+    string next_page_token = 2;
+    // Devices in the filter the daemon could not read contexts for. Describes
+    // the whole filtered set, not this page; populated on the first page
+    // (empty page_token) only, so a client paging through does not
+    // double-count it.
+    repeated EntityStatus unreachable = 15;
+}
+
+message ListContextsRequest {
+    DeviceFilter filter = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+// A single NPU execution context, as enumerated by the kernel, joined to the
+// owning thread's `/proc` metadata.
+message ContextInfo {
+    // Device the context lives on.
+    string device_name = 1;
+    // Context handle (identity within the device).
+    uint32 ctx_handle = 2;
+    // Address-space id assigned to the context.
+    uint32 asid = 3;
+    // Owning thread id — the kernel's per-context task id (`task_pid_vnr`, what
+    // userspace calls a tid). Always present. Its process (`getpid`) is joined
+    // via `/proc` and rendered by the client.
+    uint32 tid = 4;
+    // Priority ordinal parsed from the context inventory.
+    uint32 priority = 5;
+    // Device memory the context holds, bytes.
+    uint64 memory_bytes = 6;
+    // Context utilization, percent-milli (0..100000, rounded to an integer;
+    // same unit/type as DeviceTelemetry). Unset when the platform did not
+    // report a reading for this context.
+    optional uint32 utilization_percent_milli = 7;
+    // 8..10 were done_seq / in_flight_seq / pending_seq — removed; do not
+    // reuse. Whether the context is running is exposed as `running` below.
+    reserved 8, 9, 10;
+    // Whether the context is currently running (has work in flight).
+    bool running = 11;
+    // Whether the kernel marked this context guilty for a device fault.
+    bool guilty = 12;
+    // RSD group ids the context's device belongs to (empty when none).
+    repeated int32 groups = 13;
+    // Owning thread/process name from `/proc/<tid>/comm`; empty when unresolved.
+    string process_name = 14;
+    // Real user id from `/proc/<tid>/status`; unset when unresolved.
+    optional uint32 uid = 15;
+    // "" when the owning thread was resolved live; "EXIT"/"ZOMB" otherwise.
+    string liveness = 16;
+}
+
+message ListContextsResponse {
+    repeated ContextInfo contexts = 1;
+    string next_page_token = 2;
+    // As with ListWorkloads, describes the whole filtered set and is
+    // populated on the first page (empty page_token) only.
+    repeated EntityStatus unreachable = 15;
+}

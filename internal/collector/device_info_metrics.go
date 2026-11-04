@@ -38,7 +38,7 @@ func (d *DeviceInfoMetric) Reset() {
 }
 
 func (d *DeviceInfoMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := d.podResourceMapper.Snapshot()
+	podResourceInfo, _ := d.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
 		labels := buildDeviceInfoLabels(device, d.nodeName, podResourceInfo, d.includePodLabels)

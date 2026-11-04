@@ -38,10 +38,12 @@ func (u *UtilizationMetric) Reset() {
 }
 
 func (u *UtilizationMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := u.podResourceMapper.Snapshot()
+	podResourceInfo, _ := u.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
 		labels := buildLabels(device, u.nodeName, podResourceInfo, u.includePodLabels)
-		u.utilization.With(labels).Set(device.Utilization)
+		if device.Compute && device.Utilization != nil {
+			u.utilization.With(labels).Set(*device.Utilization)
+		}
 	}
 }
