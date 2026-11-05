@@ -42,11 +42,14 @@ func (s *SharedDeviceMetric) Reset() {
 }
 
 func (s *SharedDeviceMetric) UpdateMetrics(_ context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo, sharedDevices := s.podResourceMapper.SharedSnapshot()
+	podResourceInfo, sharedDevices := s.podResourceMapper.SnapshotFor(devices)
 
 	// Every device reports, exclusive ones as 0, so that alerting on == 1 does
 	// not have to distinguish "not shared" from "not collected".
 	for _, device := range devices {
+		if !device.Compute {
+			continue
+		}
 		labels := buildLabels(device, s.nodeName, podResourceInfo, true)
 		value := 0.0
 		if slices.Contains(sharedDevices, DeviceName(device.Name)) {

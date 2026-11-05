@@ -70,7 +70,7 @@ func Start(ctx context.Context, config Config) error {
 	// rbln-smd has no start ordering relative to the exporter, so it may not
 	// be up yet: connect lazily and let the scheduler's retry reach it, the
 	// same path that rides out a daemon restart later on.
-	dClient, err := daemon.NewLazyClient(config.RBLNDaemonURL)
+	dClient, err := daemon.NewLazyClient(config.RBLNDaemonURL, config.SMD)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func Start(ctx context.Context, config Config) error {
 }
 
 func startGateway(ctx context.Context, config Config) error {
-	handler := gateway.NewHandler()
+	handler := gateway.NewHandler(config.SMD)
 	defer handler.Close()
 
 	mux := http.NewServeMux()

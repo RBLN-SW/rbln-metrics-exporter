@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	podResourcesAPI "k8s.io/kubelet/pkg/apis/podresources/v1"
 
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 )
 
@@ -64,7 +65,8 @@ type PodResourceMapper struct {
 	sharedDevices []DeviceName
 	syncRequests  chan struct{}
 
-	client podResourcesAPI.PodResourcesListerClient
+	lastResponse *podResourcesAPI.ListPodResourcesResponse
+	client       podResourcesAPI.PodResourcesListerClient
 }
 
 func NewPodResourceMapper(ctx context.Context) (*PodResourceMapper, error) {
@@ -148,6 +150,7 @@ func (p *PodResourceMapper) syncPodResources() error {
 
 	p.Lock()
 	previouslyShared := p.sharedDevices
+	p.lastResponse = podResources
 	p.podResourcesByDevice = podResourcesInfo
 	p.sharedDevices = shared
 	p.Unlock()
@@ -167,8 +170,8 @@ func (p *PodResourceMapper) syncPodResources() error {
 
 // deviceMapFromPodResources joins the two shapes kubelet reports device
 // assignments in: ContainerDevices for the device plugin, and DynamicResources
-// for DRA. Both identify a device by its node name ("rbln0"), which is also
-// what the daemon reports telemetry under, so one map serves both. The sources
+// for DRA. PF allocations use the kernel name ("rbln0"); native DRA VFs add their
+// profile ("rbln0-0-vf4"). SnapshotFor resolves those against live inventory. The sources
 // are unioned rather than switched between because a cluster can run the device
 // plugin and the DRA driver at the same time.
 //
@@ -178,10 +181,58 @@ func (p *PodResourceMapper) syncPodResources() error {
 // may share a claim too, but that leaves the pod and namespace labels correct,
 // so it is not reported.
 func deviceMapFromPodResources(podResources *podResourcesAPI.ListPodResourcesResponse) (map[DeviceName]PodResourceInfo, []DeviceName) {
+	return mapPodResources(podResources, nil)
+}
+
+// Resolve allocations against the current inventory on every collection, so
+// profile changes do not revive an allocation cached under the previous profile.
+func (p *PodResourceMapper) SnapshotFor(inventory []daemon.DeviceInfo) (map[DeviceName]PodResourceInfo, []DeviceName) {
+	p.RLock()
+	response := p.lastResponse
+	p.RUnlock()
+	return mapPodResources(response, inventory)
+}
+
+func mapPodResources(podResources *podResourcesAPI.ListPodResourcesResponse, inventory []daemon.DeviceInfo) (map[DeviceName]PodResourceInfo, []DeviceName) {
+	var current map[string]daemon.DeviceInfo
+	if inventory != nil {
+		current = make(map[string]daemon.DeviceInfo, len(inventory))
+		for _, d := range inventory {
+			if d.Compute {
+				current[d.Name] = d
+			}
+		}
+	}
+	resolve := func(id, resource string, dra bool) DeviceName {
+		if current == nil {
+			return DeviceName(id)
+		}
+		if d, ok := current[id]; ok {
+			if !d.IsVF {
+				return DeviceName(id)
+			}
+			if !dra && (d.PartitionMode == "vf1" || d.PartitionMode == "vf4") && resource == "rebellions.ai/npu-"+d.PartitionMode {
+				return DeviceName(id)
+			}
+			return ""
+		}
+		if dra {
+			for _, d := range current {
+				if d.IsVF && (d.PartitionMode == "vf1" || d.PartitionMode == "vf4") && id == d.Name+"-"+d.PartitionMode {
+					return DeviceName(d.Name)
+				}
+			}
+		}
+		return ""
+	}
+
 	devices := make(map[DeviceName]PodResourceInfo)
 	shared := make(map[DeviceName]struct{})
 
 	assign := func(device DeviceName, info PodResourceInfo, logAttrs ...any) {
+		if device == "" {
+			return
+		}
 		if existing, claimed := devices[device]; claimed {
 			if existing.Namespace != info.Namespace || existing.Name != info.Name {
 				shared[device] = struct{}{}
@@ -207,11 +258,11 @@ func deviceMapFromPodResources(podResources *podResourcesAPI.ListPodResourcesRes
 			}
 
 			for _, containerDevice := range container.GetDevices() {
-				if !strings.HasPrefix(containerDevice.GetResourceName(), RBLNResourcePrefix) {
+				if !strings.HasPrefix(containerDevice.GetResourceName(), RBLNResourcePrefix+"/") {
 					continue
 				}
 				for _, deviceID := range containerDevice.GetDeviceIds() {
-					assign(DeviceName(deviceID), info, "resource", containerDevice.GetResourceName())
+					assign(resolve(deviceID, containerDevice.GetResourceName(), false), info, "resource", containerDevice.GetResourceName())
 				}
 			}
 
@@ -224,7 +275,7 @@ func deviceMapFromPodResources(podResources *podResourcesAPI.ListPodResourcesRes
 						claimResource.GetDeviceName() == "" {
 						continue
 					}
-					assign(DeviceName(claimResource.GetDeviceName()), info,
+					assign(resolve(claimResource.GetDeviceName(), "", true), info,
 						"driver", claimResource.GetDriverName(),
 						"claim", dynamicResource.GetClaimName())
 				}

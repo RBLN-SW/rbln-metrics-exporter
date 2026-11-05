@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,10 +27,17 @@ const (
 type Handler struct {
 	mu      sync.Mutex
 	clients map[string]*daemon.Client
+	options daemon.Options
 }
 
-func NewHandler() *Handler {
+func NewHandler(options ...daemon.Options) *Handler {
+	opts := daemon.DefaultOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	opts.PCIDevicesPath = ""
 	return &Handler{
+		options: opts,
 		clients: make(map[string]*daemon.Client),
 	}
 }
@@ -45,14 +51,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, _, err := net.SplitHostPort(target); err != nil {
 		slog.Debug("Rejected scrape request", "target", target, "err", err)
-		http.Error(w, fmt.Sprintf("invalid target %q: expected <host:port>: %v", target, err), http.StatusBadRequest)
+		http.Error(w, "invalid target: expected host:port", http.StatusBadRequest)
 		return
 	}
 
 	client, err := h.clientFor(target)
 	if err != nil {
 		slog.Debug("Rejected scrape request", "target", target, "err", err)
-		http.Error(w, fmt.Sprintf("invalid target %q: %v", target, err), http.StatusBadRequest)
+		http.Error(w, "unable to initialize SMD client", http.StatusBadRequest)
 		return
 	}
 
@@ -107,7 +113,7 @@ func (h *Handler) clientFor(target string) (*daemon.Client, error) {
 		slog.Debug("Reusing cached daemon client", "target", target)
 		return client, nil
 	}
-	client, err := daemon.NewLazyClient(target)
+	client, err := daemon.NewLazyClient(target, h.options)
 	if err != nil {
 		return nil, err
 	}

@@ -2,13 +2,10 @@ package collector
 
 import (
 	"context"
-	"math"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 )
-
-const gibToBytes = 1 << 30
 
 type MemoryMetric struct {
 	dramUsed          *prometheus.GaugeVec
@@ -50,15 +47,19 @@ func (m *MemoryMetric) Reset() {
 }
 
 func (m *MemoryMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := m.podResourceMapper.Snapshot()
+	podResourceInfo, _ := m.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
 		labels := buildLabels(device, m.nodeName, podResourceInfo, m.includePodLabels)
 
-		bytesUsed := uint64(math.Round(device.DRAMUsedGiB * float64(gibToBytes)))
-		bytesTotal := uint64(math.Round(device.DRAMTotalGiB * float64(gibToBytes)))
-
-		m.dramUsed.With(labels).Set(float64(bytesUsed))
-		m.dramTotal.With(labels).Set(float64(bytesTotal))
+		if !device.Compute {
+			continue
+		}
+		if device.MemoryUsedBytes != nil {
+			m.dramUsed.With(labels).Set(float64(*device.MemoryUsedBytes))
+		}
+		if device.MemoryTotalBytes != nil {
+			m.dramTotal.With(labels).Set(float64(*device.MemoryTotalBytes))
+		}
 	}
 }

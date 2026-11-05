@@ -38,13 +38,13 @@ func (p *PowerStateMetric) Reset() {
 }
 
 func (p *PowerStateMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := p.podResourceMapper.Snapshot()
+	podResourceInfo, _ := p.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
-		if device.PState < 0 {
+		if device.PState == nil {
 			continue
 		}
 		labels := buildLabels(device, p.nodeName, podResourceInfo, p.includePodLabels)
-		p.powerState.With(labels).Set(float64(device.PState))
+		p.powerState.With(labels).Set(float64(*device.PState))
 	}
 }

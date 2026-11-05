@@ -23,4 +23,4 @@ jobs:
     with:
       # Pathspecs excluded from the advisory size check. Add generated
       # directories of this repository.
-      generated_paths: "vendor go.sum pkg/rblnservicespb"
+      generated_paths: "vendor go.sum pkg/rblnservicesv1pb pkg/rblnservicespb"

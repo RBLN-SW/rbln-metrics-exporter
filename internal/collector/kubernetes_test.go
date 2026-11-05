@@ -14,11 +14,12 @@ import (
 	"google.golang.org/grpc"
 	podResourcesAPI "k8s.io/kubelet/pkg/apis/podresources/v1"
 
+	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 )
 
 const (
-	dpResource = "rebellions.ai/ATOM"
+	dpResource = "rebellions.ai/npu"
 	draDriver  = "npu.rebellions.ai"
 )
 
@@ -117,8 +118,8 @@ func TestDeviceMapFromPodResources(t *testing.T) {
 			resp: response(podResources("team-a", "mixed-pod", &podResourcesAPI.ContainerResources{
 				Name: "worker",
 				Devices: []*podResourcesAPI.ContainerDevices{
-					{ResourceName: "rebellions.ai/ATOM", DeviceIds: []string{"rbln0"}},
-					{ResourceName: "rebellions.ai/REBEL", DeviceIds: []string{"rbln1"}},
+					{ResourceName: "rebellions.ai/npu", DeviceIds: []string{"rbln0"}},
+					{ResourceName: "rebellions.ai/custom-npu", DeviceIds: []string{"rbln1"}},
 				},
 			})),
 			want: map[DeviceName]PodResourceInfo{
@@ -190,7 +191,8 @@ func TestDeviceMapFromPodResources(t *testing.T) {
 		},
 		{
 			name: "other vendors are ignored on both paths",
-			resp: response(podResources("team-c", "other-pod",
+			resp: response(podResources(
+				"team-c", "other-pod",
 				devicePluginContainer("worker", "nvidia.com/gpu", "GPU-0"),
 				draContainer("worker", "gpu-claim", "gpu.nvidia.com", "gpu-0"),
 			)),
@@ -203,7 +205,8 @@ func TestDeviceMapFromPodResources(t *testing.T) {
 		},
 		{
 			name: "sidecar sharing its pod's claim does not count as shared",
-			resp: response(podResources("team-b", "sidecar-pod",
+			resp: response(podResources(
+				"team-b", "sidecar-pod",
 				draContainer("worker", "pod-claim", draDriver, "rbln0"),
 				draContainer("logger", "pod-claim", draDriver, "rbln0"),
 			)),
@@ -213,7 +216,8 @@ func TestDeviceMapFromPodResources(t *testing.T) {
 		},
 		{
 			name: "containers of one pod holding separate devices",
-			resp: response(podResources("team-b", "two-container-pod",
+			resp: response(podResources(
+				"team-b", "two-container-pod",
 				draContainer("worker", "claim-a", draDriver, "rbln0"),
 				draContainer("logger", "claim-b", draDriver, "rbln1"),
 			)),
@@ -417,5 +421,36 @@ func TestSteadyExclusiveAllocationStaysQuiet(t *testing.T) {
 
 	if recs := jsonRecords(t, buf); len(recs) != 0 {
 		t.Fatalf("got %d records on exclusive allocation, want 0: %s", len(recs), buf.String())
+	}
+}
+
+func TestVFAllocationResolutionRequiresCurrentProfile(t *testing.T) {
+	inventory := []daemon.DeviceInfo{
+		{Name: "rbln0", Compute: false},
+		{Name: "rbln0-0", IsVF: true, Compute: true, PartitionMode: "vf4"},
+		{Name: "rbln0-1", IsVF: true, Compute: true, PartitionMode: "vf4"},
+	}
+	resp := response(
+		podResources("ns", "old-profile", draContainer("worker", "old", draDriver, "rbln0-0-vf1")),
+		podResources("ns", "consumer-a", draContainer("worker", "a", draDriver, "rbln0-0-vf4")),
+		podResources("ns", "consumer-b", draContainer("worker", "b", draDriver, "rbln0-0-vf4")),
+		podResources("ns", "dp", devicePluginContainer("worker", "rebellions.ai/npu-vf4", "rbln0-1")),
+		podResources("ns", "pf", devicePluginContainer("worker", dpResource, "rbln0")),
+		podResources("ns", "vm", draContainer("worker", "vm", draDriver, "vfio-0000-17-00-1-vf4")),
+	)
+	got, shared := mapPodResources(resp, inventory)
+	if len(got) != 2 || got["rbln0-0"].Name != "consumer-a" || got["rbln0-1"].Name != "dp" || !slices.Equal(shared, []DeviceName{"rbln0-0"}) {
+		t.Fatalf("mapping=%v shared=%v", got, shared)
+	}
+	inventory[1].PartitionMode = "vf1"
+	inventory[2].PartitionMode = "vf1"
+	got, shared = mapPodResources(resp, inventory)
+	if len(got) != 1 || got["rbln0-0"].Name != "old-profile" || len(shared) != 0 {
+		t.Fatalf("new profile mapping=%v shared=%v", got, shared)
+	}
+	inventory[1].PartitionMode = ""
+	got, _ = mapPodResources(resp, inventory)
+	if len(got) != 0 {
+		t.Fatalf("unknown profile attributed: %v", got)
 	}
 }

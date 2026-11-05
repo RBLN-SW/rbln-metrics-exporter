@@ -2,8 +2,6 @@ package collector
 
 import (
 	"context"
-	"strconv"
-	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
@@ -49,39 +47,18 @@ func (p *PCIeLinkMetric) Reset() {
 }
 
 func (p *PCIeLinkMetric) UpdateMetrics(ctx context.Context, devices []daemon.DeviceInfo) {
-	podResourceInfo := p.podResourceMapper.Snapshot()
+	podResourceInfo, _ := p.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
-		if device.Topology == nil {
+		if device.IsVF {
 			continue
 		}
 		labels := buildLabels(device, p.nodeName, podResourceInfo, p.includePodLabels)
-		if speed, ok := parseLinkSpeedGTs(device.Topology.PCIeLinkSpeed); ok {
-			p.linkSpeed.With(labels).Set(speed)
+		if device.PCIeLinkSpeed != nil {
+			p.linkSpeed.With(labels).Set(*device.PCIeLinkSpeed)
 		}
-		if width, ok := parseLinkWidth(device.Topology.PCIeLinkWidth); ok {
-			p.linkWidth.With(labels).Set(width)
+		if device.PCIeLinkWidth != nil {
+			p.linkWidth.With(labels).Set(float64(*device.PCIeLinkWidth))
 		}
 	}
-}
-
-func parseLinkSpeedGTs(speed string) (float64, bool) {
-	fields := strings.Fields(speed)
-	if len(fields) == 0 {
-		return 0, false
-	}
-	value, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil || value <= 0 {
-		return 0, false
-	}
-	return value, true
-}
-
-func parseLinkWidth(width string) (float64, bool) {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(width), "x")
-	value, err := strconv.ParseFloat(trimmed, 64)
-	if err != nil || value <= 0 {
-		return 0, false
-	}
-	return value, true
 }

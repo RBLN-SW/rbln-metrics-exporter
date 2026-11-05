@@ -2,6 +2,8 @@
 
 The RBLN Metrics Exporter exposes detailed telemetry for RBLN NPUs in [Prometheus](https://prometheus.io/) format so that you can build Grafana dashboards, alert on thermal or utilization anomalies, and correlate accelerator health with Kubernetes workloads.
 
+For installation, configuration and usage, see the [Kubernetes documentation](https://docs.rbln.ai/v0.12.0/software/system_management/kubernetes/index.html).
+
 ---
 
 ## Key Features
@@ -18,8 +20,8 @@ The RBLN Metrics Exporter exposes detailed telemetry for RBLN NPUs in [Prometheu
 
 | Requirement | Details |
 | --- | --- |
-| RBLN Driver | `>= 1.3.40` |
-| RBLN Daemon | Installed alongside the driver to serve metrics over gRPC (`:50051` by default) |
+| RBLN Driver | Compatible with the deployed SMD; device discovery and telemetry support are determined by SMD |
+| RBLN Daemon | SMD v1 APIs preferred, with v0 compatibility (`:50051` by default) — see [API requirements](api/README.md) |
 | Operating System | Linux kernel with access to `/sys`; when running on Kubernetes ensure `/var/lib/kubelet/pod-resources` is accessible |
 | Kubernetes (optional) | Any version for device-plugin allocations. For DRA allocations, `>= 1.34` — see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
 | Prometheus | Any Prometheus-compatible scraper (Vanilla, Helm chart, or Prometheus Operator). The exporter can run without Prometheus at first, but you need a scraper to persist or visualize the metrics. |
@@ -153,7 +155,32 @@ Deploy Grafana via Helm or the Grafana Operator and import dashboards that visua
 
 - Temperature vs. power draw per card
 - Memory utilization by namespace/pod
-- Binary health alarms (0 = Active, 1 = Inactive)
+- Device readiness (`health=0` when READY) and fault-state alarms (`device_status{state="fault"}=1`)
+
+### SMD API compatibility and SR-IOV notes
+
+This update includes breaking changes:
+
+- The exporter prefers v1 and uses v0 collection when a required v1 RPC is
+  unimplemented. Missing v1 lifecycle state is supplemented from v0
+  `dev_status` when available. Known v1 states are preserved; there is no
+  product-specific or user-selected API mode. See [API requirements](api/README.md).
+- For v1 collection, the exporter creates a clock-free metric group, requiring
+  `MetricService.CreateMetricGroup` permission. To use a pre-provisioned group,
+  set `--metric-group-id` and `--create-metric-group=false`. Use `--help` for
+  TLS and other connection options.
+- `health` is 0 for READY and 1 for another known lifecycle state. Unavailable
+  state has no health sample and retains `state="not_found"`, matching SMD's
+  display of unspecified or unreadable state.
+- Unavailable v1 readings are omitted rather than reported as zero. The v0
+  scalar API cannot distinguish absent readings from measured zero. The new
+  `rbln_npu_collection_success` reports per-device query outcomes separately
+  from readiness; successful queries do not guarantee every metric is available.
+- Native VFs gain memory/utilization and Pod attribution. Hosting PFs no longer
+  export compute memory/utilization; temperature, power and PCIe link readings
+  remain PF-only to avoid duplicate physical measurements.
+- `device_info` adds `partition_mode` and `compute`; `num_vfs` is empty when
+  unknown. UUIDs can be inherited, so identify functions by `hostname,name`.
 
 ### Dynamic Resource Allocation (DRA)
 
@@ -239,7 +266,7 @@ Two failure signals exist and mean different things:
 - Collection happens inside the scrape request, so slow targets consume scrape time. The gateway honors the `X-Prometheus-Scrape-Timeout-Seconds` header Prometheus sends (10s cap by default) — raise `scrape_timeout` for slow links.
 - Pod/namespace/container labels are not available: the kubelet pod-resources API is node-local and cannot describe remote hosts. Use `local` mode (DaemonSet) on Kubernetes clusters.
 - The `hostname` label is filled with the host part of the target address.
-- The gRPC connection to targets is plaintext; ensure the daemon port is reachable from the gateway and restricted to trusted networks.
+- The gRPC connection is plaintext unless the SMD TLS options above are configured. Gateway clients use the same TLS and metric-group configuration for every target.
 
 ---
 
@@ -252,7 +279,8 @@ Two failure signals exist and mean different things:
 | `rbln_npu_memory_used` | DRAM currently in use | bytes |
 | `rbln_npu_memory_total` | Total DRAM | bytes |
 | `rbln_npu_utilization` | SM utilization | % |
-| `rbln_npu_health` | Binary health (0 = active, 1 = inactive) | 0/1 |
+| `rbln_npu_health` | Readiness: 0 = READY, 1 = another known lifecycle state; absent when unknown | 0/1 |
+| `rbln_npu_collection_success` | 1 when per-device queries succeeded, 0 on a reported per-device query failure; independent of hardware state and metric availability | 0/1 |
 | `rbln_npu_device_status` | Device state machine status; one series per `state`, 1 marks the current state | 0/1 |
 | `rbln_npu_power_state` | DVFS performance state (0 = highest performance); absent when the daemon has no reading | ordinal |
 | `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
@@ -266,7 +294,7 @@ Two failure signals exist and mean different things:
 | Label | Description |
 | --- | --- |
 | `name` | Character device node (`rbln0`, `rbln1`, …) |
-| `uuid` | Unique NPU UUID |
+| `uuid` | Device UUID; VFs may inherit their PF UUID |
 | `card` | Marketing card name (e.g., `RBLN-CA25`) |
 | `deviceID` | PCIe device ID |
 | `hostname` | Host node name |
@@ -284,13 +312,20 @@ Two failure signals exist and mean different things:
 
 ### Example Output
 
+Illustrative output for a native VF with available lifecycle state. Labels are
+shortened for readability; the full common label set is listed above.
+
 ```text
 # TYPE rbln_npu_memory_total gauge
-rbln_npu_memory_total{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln0",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="55668c63-d739-4193-8212-ad7ba933520c"} 16877882368
-# TYPE rbln_npu_temperature gauge
-rbln_npu_temperature{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln1",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="84389d45-ebf3-4b74-9d80-6ec8a09d8be4"} 54
-# HELP rbln_npu_health NPU health status
-rbln_npu_health{card="RBLN-CA25",container="ubuntu",deviceID="1250",driver_version="2.0.1",firmware_version="2.0.1",hostname="sw-mpc-clsdk-bm-worker-01",name="rbln3",namespace="default",pod="rebel-device-plugin-testpod-1",smc_version="15.10.13.14",uuid="8e65fc0d-df7d-4e21-a81b-a76a1a1e69ab"} 0
+rbln_npu_memory_total{hostname="worker-a",name="rbln0-0",pod="consumer"} 150323855360
+# TYPE rbln_npu_memory_used gauge
+rbln_npu_memory_used{hostname="worker-a",name="rbln0-0",pod="consumer"} 545259520
+# TYPE rbln_npu_health gauge
+rbln_npu_health{hostname="worker-a",name="rbln0-0",pod="consumer"} 0
+# TYPE rbln_npu_collection_success gauge
+rbln_npu_collection_success{hostname="worker-a",name="rbln0-0",pod="consumer"} 1
+# TYPE rbln_npu_device_info gauge
+rbln_npu_device_info{hostname="worker-a",name="rbln0-0",pod="consumer",is_vf="true",parent_name="rbln0",num_vfs="0",partition_mode="vf1",compute="true"} 1
 ```
 
 ---

@@ -1,17 +1,22 @@
-# proto
+# SMD API bindings
 
-`rbln_services.proto` is a copy of the rbln-daemon (RSMD) public v0 API,
-kept byte-identical to the daemon's source of truth except for the added
-`go_package` option.
+`rbln_smd_v1.proto` defines the preferred API, with bindings in
+`pkg/rblnservicesv1pb`. `rbln_services.proto` and `pkg/rblnservicespb` provide
+v0 compatibility when required v1 RPCs are unimplemented, and supply missing
+v1 lifecycle state through `getTotalInfo.dev_status`.
 
-## Sync provenance
+The v1 path uses Inventory, Metric and Topology services.
+Inventory supplies `npu_id`, `is_vf` and `parent_name`; readiness monitoring
+uses v1 `state` when known, otherwise v0 state when available. Missing inline
+static specs are retrieved through `GetVersion` and `GetMemorySpec`.
+Telemetry comes from `SampleMetrics`.
 
-| | |
-| --- | --- |
-| Source repo | `ssw-common-tools` |
-| Source path | `rbln-smd/proto/public/rbln_smd.proto` |
-| Synced from | commit `39805f59c225815b4307c2016330794213b834b2` (branch `dev`, 2026-06-19) |
+After updating the schema, regenerate the bindings with:
 
-To re-sync: copy the file from the source path, re-add the `go_package`
-option below the `package` statement, update the commit hash above, then
-regenerate the bindings
+```sh
+protoc -I api \
+  --go_out=. --go_opt=module=github.com/rebellions-sw/rbln-metrics-exporter \
+  --go-grpc_out=. --go-grpc_opt=module=github.com/rebellions-sw/rbln-metrics-exporter \
+  api/rbln_services.proto api/rbln_smd_v1.proto
+go mod vendor
+```

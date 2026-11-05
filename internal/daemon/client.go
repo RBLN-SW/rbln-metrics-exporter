@@ -2,340 +2,326 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"math"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
-	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
-	"github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
+	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
 )
 
-const (
-	milliCelsiusToCelsius = 1000.0
-	microWattToWatt       = 1_000_000.0
-
-	PStateUnavailable = -1
-)
-
-type Client struct {
-	conn     *grpc.ClientConn
-	client   rblnservicespb.RBLNServicesClient
-	endpoint string
-
-	// Edge-tracking state for the device-visibility records; guarded by mu
-	// because gateway mode may serve concurrent scrapes on one cached client.
-	mu            sync.Mutex
-	collectedOnce bool
-	prevMissing   map[string]bool
-	prevHealth    map[string]deviceHealth
-}
-
-// deviceHealth is the health-relevant slice of a device's state. READY/BUSY
-// activity churn is deliberately excluded so steady state stays silent in
-// the logs; the full state is always available via the device-state metric.
-type deviceHealth struct {
-	state     rblnservicespb.DeviceStatus
-	errStatus int
-}
-
-func (h deviceHealth) degraded() bool {
-	return h.state == rblnservicespb.DeviceStatus_FAULT || h.errStatus != 0
-}
-
-// reconnectMaxDelay caps gRPC's reconnect backoff (120 s by default). The
-// channel only redials on that schedule, so after a daemon outage of a few
-// minutes — a driver reinstall — the default leaves rbln_up at 0 for up to two
-// more minutes once rbln-smd is back. A refused dial costs next to nothing, so
-// retry at about the default collection interval instead.
 const reconnectMaxDelay = 5 * time.Second
 
-// NewLazyClient does not connect: the channel dials in the background and
-// keeps redialing, so a daemon that is not up yet, or restarts later, is
-// reached once it serves; until then RPCs fail and the caller retries on its
-// own schedule.
-func NewLazyClient(endpoint string) (*Client, error) {
+type Client struct {
+	conn      *grpc.ClientConn
+	inventory pb.InventoryServiceClient
+	metrics   pb.MetricServiceClient
+	topology  pb.TopologyServiceClient
+	legacy    legacy.RBLNServicesClient
+	endpoint  string
+	options   Options
+	// Gateway scrapes share the client. Serialize snapshots and transition logs.
+	mu                sync.Mutex
+	collectedOnce     bool
+	prevMissing       map[string]bool
+	prevState         map[string]pb.DeviceState
+	activeAPI         string
+	stateLookupFailed bool
+}
+
+func NewLazyClient(endpoint string, options ...Options) (*Client, error) {
+	opts := DefaultOptions()
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.MetricGroupID == "" {
+		opts.MetricGroupID = DefaultMetricGroupID
+	}
+	if opts.MetricGroupID == "default" {
+		return nil, fmt.Errorf("the SMD default metric group includes clocks; use a dedicated clock-free group")
+	}
+	creds, err := transportCredentials(opts)
+	if err != nil {
+		return nil, err
+	}
 	bo := backoff.DefaultConfig
 	bo.MaxDelay = reconnectMaxDelay
-	conn, err := grpc.NewClient(
-		endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff: bo,
-			// Zero would shrink each dial's deadline to the backoff delay;
-			// keep gRPC's default.
-			MinConnectTimeout: 20 * time.Second,
-		}),
-	)
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds), grpc.WithConnectParams(grpc.ConnectParams{Backoff: bo, MinConnectTimeout: 20 * time.Second}))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create rbln-daemon client for %s: %w", endpoint, err)
+		return nil, fmt.Errorf("create rbln-smd client: %w", err)
 	}
-
-	return &Client{
-		conn:     conn,
-		client:   rblnservicespb.NewRBLNServicesClient(conn),
-		endpoint: endpoint,
-	}, nil
+	return &Client{conn: conn, inventory: pb.NewInventoryServiceClient(conn), metrics: pb.NewMetricServiceClient(conn), topology: pb.NewTopologyServiceClient(conn), legacy: legacy.NewRBLNServicesClient(conn), endpoint: endpoint, options: opts}, nil
 }
 
-func (c *Client) Close() error {
-	return c.conn.Close()
-}
-
-type TopologyInfo struct {
-	NUMANode      int32
-	CPUList       string
-	RSDGroup      string
-	PCIeLinkSpeed string
-	PCIeLinkWidth string
-}
-
-type DeviceInfo struct {
-	UUID            string
-	Name            string
-	DeviceID        string
-	Card            string
-	PCIBusID        string
-	IsVF            bool
-	ParentName      string
-	NumVFs          uint32
-	Temperature     float64
-	Power           float64
-	DRAMUsedGiB     float64
-	DRAMTotalGiB    float64
-	Utilization     float64
-	DriverVersion   string
-	FirmwareVersion string
-	SMCVersion      string
-	ErrStatus       int
-	DevState        rblnservicespb.DeviceStatus
-	PState          int32
-	Topology        *TopologyInfo
-}
+func (c *Client) Close() error { return c.conn.Close() }
 
 func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
-	devices, err := c.getServiceableDevices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get serviceable devices: %w", err)
-	}
-
-	totalInfos, err := c.getTotalDeviceInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get total device info: %w", err)
-	}
-
-	topologies, err := c.getTopologyByName(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list topology: %w", err)
-	}
-
-	// Key by name, not UUID: getTotalInfo includes SR-IOV VFs, which share
-	// the parent PF's UUID, so a UUID key could overwrite the PF's telemetry
-	// with a VF's.
-	totalMap := make(map[string]*rblnservicespb.DeviceInfo, len(totalInfos))
-	for _, info := range totalInfos {
-		totalMap[info.GetName()] = info
-	}
-
-	merged := make([]DeviceInfo, 0, len(devices))
-	missing := make(map[string]bool)
-	for _, dev := range devices {
-		di := DeviceInfo{
-			UUID:       dev.GetUuid(),
-			Name:       dev.GetName(),
-			DeviceID:   dev.GetDevId(),
-			Card:       dev.GetCardName(),
-			PCIBusID:   dev.GetPciBusId(),
-			IsVF:       dev.GetIsVf(),
-			ParentName: dev.GetParentName(),
-			NumVFs:     dev.GetNumVfs(),
-			DevState:   rblnservicespb.DeviceStatus_NOT_FOUND,
-			PState:     PStateUnavailable,
-			Topology:   topologies[dev.GetName()],
-		}
-		if info, ok := totalMap[dev.GetName()]; ok {
-			// SMI now reports temperature in milli-Celsius and power in micro-Watts.
-			di.Temperature = float64(info.GetTemperature()) / milliCelsiusToCelsius
-			di.Power = float64(info.GetWatt()) / microWattToWatt
-			di.DRAMTotalGiB = float64(info.GetTotalMem())
-			di.DRAMUsedGiB = float64(info.GetUsedMem())
-			di.Utilization = float64(info.GetUtilization())
-			di.DriverVersion = info.GetDrvVersion()
-			di.FirmwareVersion = info.GetFwVersion()
-			di.ErrStatus = int(info.GetErrStatus())
-			di.DevState = info.GetDevStatus()
-			di.PState = info.GetPState()
-		} else {
-			missing[dev.GetName()] = true
-			slog.Debug("Device missing from total info; telemetry zeroed", "device", dev.GetName())
-		}
-
-		di.SMCVersion, err = c.getSMCVersion(ctx, dev.GetName())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get version for %s: %w", dev.GetName(), err)
-		}
-
-		merged = append(merged, di)
-		slog.Log(ctx, logging.LevelTrace, "Merged device",
-			"device", di.Name, "uuid", di.UUID, "state", di.DevState.String(),
-			"pstate", di.PState, "errStatus", di.ErrStatus)
-	}
-
-	slog.Debug("Merged device info", "devices", len(devices),
-		"totalInfos", len(totalInfos), "topologies", len(topologies), "merged", len(merged))
-	c.recordDeviceTransitions(merged, missing)
-	return merged, nil
-}
-
-// recordDeviceTransitions makes device-level failures diagnosable from
-// default-level logs while keeping steady state silent: every record here is
-// edge-triggered (fires once on a transition, never per cycle).
-func (c *Client) recordDeviceTransitions(merged []DeviceInfo, missing map[string]bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if !c.collectedOnce {
-		c.collectedOnce = true
-		slog.Info("First collection succeeded", "endpoint", c.endpoint, "devices", len(merged))
+	api := "v1"
+	devices, missing, err := c.collectV1(ctx)
+	if status.Code(err) == codes.Unimplemented {
+		api = "v0"
+		devices, missing, err = c.collectV0(ctx)
 	}
-
-	serviceable := make(map[string]bool, len(merged))
-	for _, di := range merged {
-		serviceable[di.Name] = true
-	}
-
-	for name := range missing {
-		if !c.prevMissing[name] {
-			slog.Warn("Device missing from total info", "device", name,
-				"effect", "telemetry zeroed until device returns")
-		}
-	}
-	for name := range c.prevMissing {
-		if !missing[name] && serviceable[name] {
-			slog.Info("Device returned to total info", "device", name)
-		}
-	}
-
-	health := make(map[string]deviceHealth, len(merged))
-	for _, di := range merged {
-		if missing[di.Name] {
-			continue // the missing warn already covers this device
-		}
-		now := deviceHealth{state: di.DevState, errStatus: di.ErrStatus}
-		health[di.Name] = now
-		// The zero value of prev reads as healthy, so a device that is
-		// already sick on the first collection still gets its warn.
-		prev := c.prevHealth[di.Name]
-		if prev.degraded() == now.degraded() {
-			continue
-		}
-		if now.degraded() {
-			slog.Warn("Device entered degraded state", "device", di.Name,
-				"state", now.state.String(), "errStatus", now.errStatus)
-		} else {
-			slog.Info("Device recovered", "device", di.Name, "state", now.state.String())
-		}
-	}
-
-	// prevHealth and prevMissing are disjoint (a missing device is never in
-	// health), so a vanished device warns exactly once.
-	for name := range c.prevHealth {
-		if !serviceable[name] {
-			slog.Warn("Device no longer serviceable", "device", name,
-				"effect", "metrics for this device are no longer exported")
-		}
-	}
-	for name := range c.prevMissing {
-		if !serviceable[name] {
-			slog.Warn("Device no longer serviceable", "device", name,
-				"effect", "metrics for this device are no longer exported")
-		}
-	}
-
-	c.prevMissing = missing
-	c.prevHealth = health
-}
-
-func (c *Client) getTopologyByName(ctx context.Context) (map[string]*TopologyInfo, error) {
-	resp, err := c.client.RblnListTopology(ctx, &rblnservicespb.DeviceFilter{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to RblnListTopology RPC: %w", err)
+		return nil, err
 	}
-
-	topologies := make(map[string]*TopologyInfo, len(resp.GetEntries()))
-	for _, entry := range resp.GetEntries() {
-		// A failed entry's zero values are indistinguishable from real
-		// readings (e.g. numa_node 0), so skip it entirely.
-		if entryErr := entry.GetError(); entryErr.GetCode() != 0 || entryErr.GetMessage() != "" {
-			slog.Debug("Skipping topology entry with error",
-				"device", entry.GetDeviceName(), "code", entryErr.GetCode(), "errMessage", entryErr.GetMessage())
-			continue
-		}
-		topologies[entry.GetDeviceName()] = &TopologyInfo{
-			NUMANode:      entry.GetNumaNode(),
-			CPUList:       entry.GetLocalCpulist(),
-			RSDGroup:      entry.GetRsdGroup(),
-			PCIeLinkSpeed: entry.GetPcieLinkSpeed(),
-			PCIeLinkWidth: entry.GetPcieLinkWidth(),
-		}
+	if api == "v1" {
+		c.supplementLegacyStates(ctx, devices)
 	}
-	return topologies, nil
-}
-
-func (c *Client) getSMCVersion(ctx context.Context, name string) (string, error) {
-	version, err := c.client.GetVersion(ctx, &rblnservicespb.Device{Name: name})
-	if err != nil {
-		return "", fmt.Errorf("failed to GetVersion RPC: %w", err)
+	if c.activeAPI != api {
+		slog.Info("Selected SMD collection API", "endpoint", c.endpoint, "api", api)
+		c.activeAPI = api
 	}
-	if version.GetErrStatus() != rblnservicespb.Status_SUCCEED {
-		slog.Debug("Daemon returned no version", "device", name)
-		return "", nil
-	}
-	return version.GetSmcVersion(), nil
-}
-
-func (c *Client) getServiceableDevices(ctx context.Context) ([]*rblnservicespb.Device, error) {
-	stream, err := c.client.GetServiceableDeviceList(ctx, &rblnservicespb.Empty{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to GetServiceableDeviceList RPC: %w", err)
-	}
-
-	var devices []*rblnservicespb.Device
-	for {
-		d, err := stream.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, fmt.Errorf("failed to receive device: %w", err)
-		}
-		devices = append(devices, d)
-	}
+	c.recordDeviceTransitions(devices, missing)
 	return devices, nil
 }
 
-func (c *Client) getTotalDeviceInfo(ctx context.Context) ([]*rblnservicespb.DeviceInfo, error) {
-	stream, err := c.client.GetTotalInfo(ctx, &rblnservicespb.Empty{})
+func (c *Client) collectV1(ctx context.Context) ([]DeviceInfo, map[string]bool, error) {
+	devices, err := c.listDevices(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to GetTotalInfo RPC: %w", err)
+		return nil, nil, err
 	}
-
-	var deviceinfos []*rblnservicespb.DeviceInfo
-	for {
-		d, err := stream.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, fmt.Errorf("failed to receive device: %w", err)
+	topologies, topologyFailures, err := c.listTopology(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	readings := map[string][]*pb.MetricSample{}
+	missing := map[string]bool{}
+	if len(devices) > 0 {
+		if err := c.ensureMetricGroup(ctx); err != nil {
+			return nil, nil, err
 		}
-		deviceinfos = append(deviceinfos, d)
+		resp, err := c.metrics.SampleMetrics(ctx, &pb.SampleMetricsRequest{Group: &pb.MetricGroupRef{Id: c.options.MetricGroupID}})
+		if err != nil {
+			return nil, nil, fmt.Errorf("SampleMetrics: %w", err)
+		}
+		for _, e := range resp.GetUnreachable() {
+			missing[e.GetRef()] = true
+		}
+		for _, sample := range resp.GetSamples() {
+			name := sample.GetDevice().GetName()
+			if name != "" && !missing[name] {
+				readings[name] = append(readings[name], sample)
+			}
+		}
 	}
-	return deviceinfos, nil
+	merged := make([]DeviceInfo, 0, len(devices))
+	for _, d := range devices {
+		if c.foreignDriver(d.GetPciBusId()) {
+			continue
+		}
+		di := DeviceInfo{UUID: d.GetUuid(), Name: d.GetName(), DeviceID: d.GetDevId(), Card: d.GetCardName(), PCIBusID: d.GetPciBusId(), IsVF: d.GetIsVf(), ParentName: d.GetParentName(), Compute: d.NpuId != nil, DevState: d.GetState(), Topology: topologies[d.GetName()]}
+		di.CollectionSucceeded = !missing[di.Name] && !topologyFailures[di.Name]
+		versions := d.GetVersions()
+		if versions == nil {
+			// Some SMD responses omit inline static specs even with FULL detail.
+			v, err := c.inventory.GetVersion(ctx, &pb.GetVersionRequest{Device: &pb.DeviceRef{Name: di.Name}})
+			if err == nil {
+				versions = &pb.VersionInfo{FwVersion: v.GetFwVersion(), DrvVersion: v.GetDrvVersion(), SmcVersion: v.GetSmcVersion()}
+			} else if !deviceUnavailable(err) {
+				return nil, nil, fmt.Errorf("GetVersion(%s): %w", di.Name, err)
+			} else {
+				di.CollectionSucceeded = false
+			}
+		}
+		di.DriverVersion, di.FirmwareVersion, di.SMCVersion = versions.GetDrvVersion(), versions.GetFwVersion(), versions.GetSmcVersion()
+		memory := d.GetMemory()
+		if memory == nil && di.Compute {
+			m, err := c.inventory.GetMemorySpec(ctx, &pb.GetMemorySpecRequest{Device: &pb.DeviceRef{Name: di.Name}})
+			if err == nil {
+				memory = m.GetMemory()
+			} else if !deviceUnavailable(err) {
+				return nil, nil, fmt.Errorf("GetMemorySpec(%s): %w", di.Name, err)
+			} else {
+				di.CollectionSucceeded = false
+			}
+		}
+		if memory != nil && di.Compute {
+			v := memory.GetTotalBytes()
+			di.MemoryTotalBytes = &v
+		}
+		c.partitionMetadata(&di, devices)
+		if !di.IsVF && di.Topology != nil {
+			di.PCIeLinkSpeed, di.PCIeLinkWidth = di.Topology.LinkSpeed, di.Topology.LinkWidth
+		}
+		if !missing[di.Name] {
+			for _, sample := range readings[di.Name] {
+				applySample(&di, sample)
+			}
+		}
+		merged = append(merged, di)
+	}
+	return merged, missing, nil
+}
+
+func deviceUnavailable(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.FailedPrecondition:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) listDevices(ctx context.Context) ([]*pb.DeviceInfo, error) {
+	var out []*pb.DeviceInfo
+	token := ""
+	seen := map[string]bool{}
+	for {
+		r, err := c.inventory.ListDevices(ctx, &pb.ListDevicesRequest{Filter: pb.DeviceListFilter_DEVICE_LIST_FILTER_ALL, Detail: pb.DeviceListDetail_DEVICE_LIST_DETAIL_FULL, PageSize: 1000, PageToken: token})
+		if err != nil {
+			return nil, fmt.Errorf("InventoryService.ListDevices: %w", err)
+		}
+		unavailable := map[string]bool{}
+		for _, e := range r.GetUnreachable() {
+			unavailable[e.GetRef()] = true
+		}
+		for _, d := range r.GetItems() {
+			if d.GetName() != "" && !unavailable[d.GetName()] {
+				out = append(out, d)
+			}
+		}
+		token = r.GetNextPageToken()
+		if token == "" {
+			return out, nil
+		}
+		if seen[token] {
+			return nil, fmt.Errorf("ListDevices repeated page token")
+		}
+		seen[token] = true
+	}
+}
+
+func (c *Client) listTopology(ctx context.Context) (map[string]*TopologyInfo, map[string]bool, error) {
+	out := map[string]*TopologyInfo{}
+	failures := map[string]bool{}
+	token := ""
+	seen := map[string]bool{}
+	for {
+		r, err := c.topology.ListTopology(ctx, &pb.ListTopologyRequest{PageSize: 1000, PageToken: token})
+		if err != nil {
+			return nil, nil, fmt.Errorf("ListTopology: %w", err)
+		}
+		unavailable := map[string]bool{}
+		for _, e := range r.GetUnreachable() {
+			unavailable[e.GetRef()] = true
+			failures[e.GetRef()] = true
+		}
+		for _, e := range r.GetEntries() {
+			if !unavailable[e.GetDeviceName()] {
+				out[e.GetDeviceName()] = &TopologyInfo{NUMANode: e.GetNumaNode(), CPUList: e.GetLocalCpulist(), RSDGroup: e.GetRsdGroup(), LinkSpeed: parseLinkSpeed(e.GetPcieLinkSpeed()), LinkWidth: parseLinkWidth(e.GetPcieLinkWidth())}
+			}
+		}
+		token = r.GetNextPageToken()
+		if token == "" {
+			return out, failures, nil
+		}
+		if seen[token] {
+			return nil, nil, fmt.Errorf("ListTopology repeated page token")
+		}
+		seen[token] = true
+	}
+}
+
+func applySample(d *DeviceInfo, s *pb.MetricSample) {
+	if value, ok := s.GetTypedValue().(*pb.MetricSample_FloatValue); ok {
+		v := value.FloatValue
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return
+		}
+		switch s.GetMetricId() {
+		case pb.MetricId_METRIC_ID_TEMPERATURE_MILLI_CELSIUS:
+			if !d.IsVF {
+				v /= 1000
+				d.Temperature = &v
+			}
+		case pb.MetricId_METRIC_ID_POWER_MICRO_WATT:
+			if !d.IsVF && v >= 0 {
+				v /= 1e6
+				d.Power = &v
+			}
+		case pb.MetricId_METRIC_ID_UTILIZATION_PERCENT_MILLI:
+			if d.Compute && v >= 0 && v <= 100000 {
+				v /= 1000
+				d.Utilization = &v
+			}
+		}
+	}
+	if value, ok := s.GetTypedValue().(*pb.MetricSample_IntValue); ok {
+		v := value.IntValue
+		if v < 0 {
+			return
+		}
+		switch s.GetMetricId() {
+		case pb.MetricId_METRIC_ID_MEMORY_USED_BYTES:
+			if d.Compute {
+				n := uint64(v)
+				d.MemoryUsedBytes = &n
+			}
+		case pb.MetricId_METRIC_ID_PSTATE:
+			d.PState = &v
+		}
+	}
+}
+
+func (c *Client) recordDeviceTransitions(devices []DeviceInfo, missing map[string]bool) {
+	if !c.collectedOnce {
+		c.collectedOnce = true
+		slog.Info("First collection succeeded", "endpoint", c.endpoint, "devices", len(devices))
+	}
+	states := map[string]pb.DeviceState{}
+	for _, d := range devices {
+		states[d.Name] = d.DevState
+		if missing[d.Name] && !c.prevMissing[d.Name] {
+			slog.Warn("Device telemetry unavailable", "device", d.Name, "effect", "dynamic metrics omitted until collection recovers")
+		}
+		if !missing[d.Name] && c.prevMissing[d.Name] {
+			slog.Info("Device telemetry recovered", "device", d.Name)
+		}
+		wasFault := c.prevState[d.Name] == pb.DeviceState_DEVICE_STATE_FAULT
+		fault := d.DevState == pb.DeviceState_DEVICE_STATE_FAULT
+		if fault && !wasFault {
+			slog.Warn("Device entered degraded state", "device", d.Name, "state", d.DevState.String())
+		}
+		if wasFault && !fault && d.HasKnownState() {
+			slog.Info("Device recovered", "device", d.Name, "state", d.DevState.String())
+		}
+	}
+	for name := range c.prevState {
+		if _, ok := states[name]; !ok {
+			slog.Warn("Device no longer present", "device", name, "effect", "metrics for this device are no longer exported")
+		}
+	}
+	c.prevState, c.prevMissing = states, missing
+}
+
+func parseLinkSpeed(s string) *float64 {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return nil
+	}
+	v, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil || v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return nil
+	}
+	return &v
+}
+
+func parseLinkWidth(s string) *int64 {
+	v, err := strconv.ParseInt(strings.TrimPrefix(strings.TrimSpace(s), "x"), 10, 64)
+	if err != nil || v <= 0 {
+		return nil
+	}
+	return &v
 }
