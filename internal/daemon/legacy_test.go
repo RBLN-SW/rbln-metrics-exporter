@@ -119,6 +119,38 @@ func TestLegacyOnlyDaemonCollectsPFAndVF(t *testing.T) {
 	}
 }
 
+func TestLegacyFailedReadingsDoNotReportSuccessfulCollection(t *testing.T) {
+	for _, state := range []legacy.DeviceStatus{legacy.DeviceStatus_READY, legacy.DeviceStatus_BUSY, legacy.DeviceStatus_FAULT} {
+		t.Run(state.String(), func(t *testing.T) {
+			old := &smdtest.LegacyServer{
+				Devices: []*legacy.Device{{Name: "rbln0"}, {Name: "rbln1"}},
+				Infos: []*legacy.DeviceInfo{
+					{Name: "rbln0", DevStatus: state, ErrStatus: legacy.Status_FAILED, UsedMem: 1, Temperature: 35000},
+					{Name: "rbln1", DevStatus: legacy.DeviceStatus_READY, UsedMem: 2},
+				},
+			}
+			c := startFake(t, &smdtest.Server{Legacy: old, LegacyOnly: true})
+			got := collect(t, c)
+			if got[0].CollectionSucceeded || got[0].Temperature != nil || got[0].MemoryUsedBytes != nil || got[0].PState != nil {
+				t.Fatalf("FAILED response treated as valid telemetry: %+v", got[0])
+			}
+			if got[0].DevState != legacyState(state) {
+				t.Fatal("query failure replaced the device's lifecycle state")
+			}
+			if !got[1].CollectionSucceeded || got[1].MemoryUsedBytes == nil || *got[1].MemoryUsedBytes != 2<<30 {
+				t.Fatalf("failure affected another device: %+v", got[1])
+			}
+			old.Mu.Lock()
+			old.Infos[0].ErrStatus = legacy.Status_SUCCEED
+			old.Mu.Unlock()
+			recovered := collect(t, c)[0]
+			if !recovered.CollectionSucceeded || recovered.MemoryUsedBytes == nil || *recovered.MemoryUsedBytes != 1<<30 || recovered.DevState != legacyState(state) {
+				t.Fatalf("collection did not recover independently of readiness: %+v", recovered)
+			}
+		})
+	}
+}
+
 func TestV1FailuresAreNotDowngradedToLegacy(t *testing.T) {
 	for _, method := range []string{"inventory", "topology", "groups", "create", "samples"} {
 		for _, code := range []codes.Code{codes.PermissionDenied, codes.Unavailable} {

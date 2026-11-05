@@ -71,8 +71,10 @@ func (c *Client) findMetricGroup(ctx context.Context) (*pb.MetricGroup, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ListMetricGroups: %w", err)
 		}
-		if len(r.GetUnreachable()) != 0 {
-			return nil, fmt.Errorf("ListMetricGroups returned unreachable groups; cannot verify clock-free sampling")
+		for _, unavailable := range r.GetUnreachable() {
+			if unavailable.GetRef() == c.options.MetricGroupID {
+				return nil, fmt.Errorf("SMD metric group %q is unreachable; cannot verify clock-free sampling", c.options.MetricGroupID)
+			}
 		}
 		for _, g := range r.GetItems() {
 			if g.GetId() == c.options.MetricGroupID {

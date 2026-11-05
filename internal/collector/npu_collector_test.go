@@ -154,7 +154,7 @@ func TestCollectionVFProfilesAndSeriesLifecycle(t *testing.T) {
 	}
 }
 
-func TestUnspecifiedDeviceStateIsUnknownNotMissingOrHealthy(t *testing.T) {
+func TestUnspecifiedDeviceStatePreservesNotFoundWithoutHealth(t *testing.T) {
 	t.Setenv("PROMETHEUS_METRIC_NAMES", "true")
 	r := prometheus.NewRegistry()
 	mapper := NewNoopPodResourceMapper()
@@ -169,7 +169,7 @@ func TestUnspecifiedDeviceStateIsUnknownNotMissingOrHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unknown := 0
+	unavailable := 0
 	for _, f := range families {
 		if f.GetName() == "rbln_npu_health" {
 			t.Fatal("unknown state reported as healthy")
@@ -178,19 +178,19 @@ func TestUnspecifiedDeviceStateIsUnknownNotMissingOrHealthy(t *testing.T) {
 			continue
 		}
 		for _, m := range f.GetMetric() {
-			if labelValue(m, "state") == "not_found" {
-				t.Fatal("present device reported as missing")
+			if labelValue(m, "state") == "unknown" {
+				t.Fatal("renamed the existing not_found state label")
 			}
 			if m.GetGauge().GetValue() == 1 {
-				if labelValue(m, "state") != "unknown" {
+				if labelValue(m, "state") != "not_found" {
 					t.Fatalf("unexpected state: %v", m)
 				}
-				unknown++
+				unavailable++
 			}
 		}
 	}
-	if unknown != 2 {
-		t.Fatalf("got %d unknown devices, want 2", unknown)
+	if unavailable != 2 {
+		t.Fatalf("got %d devices with unavailable state, want 2", unavailable)
 	}
 }
 

@@ -36,6 +36,7 @@ type Server struct {
 	Errors              map[string]error
 	Unreachable         []*pb.EntityStatus
 	TopologyUnreachable []*pb.EntityStatus
+	GroupUnreachable    []*pb.EntityStatus
 	Legacy              *LegacyServer
 	LegacyOnly          bool
 }
@@ -117,9 +118,9 @@ func (s *Server) ListMetricGroups(context.Context, *pb.ListMetricGroupsRequest) 
 	defer s.Mu.Unlock()
 	var groups []*pb.MetricGroup
 	for _, g := range s.Groups {
-		groups = append(groups, proto.Clone(g).(*pb.MetricGroup))
+		groups = append(groups, g)
 	}
-	return &pb.ListMetricGroupsResponse{Items: groups}, s.Errors["groups"]
+	return proto.Clone(&pb.ListMetricGroupsResponse{Items: groups, Unreachable: s.GroupUnreachable}).(*pb.ListMetricGroupsResponse), s.Errors["groups"]
 }
 
 func (s *Server) CreateMetricGroup(_ context.Context, r *pb.CreateMetricGroupRequest) (*pb.CreateMetricGroupResponse, error) {

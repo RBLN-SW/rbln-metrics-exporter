@@ -21,7 +21,7 @@ For installation, configuration and usage, see the [Kubernetes documentation](ht
 | Requirement | Details |
 | --- | --- |
 | RBLN Driver | Compatible with the deployed SMD; device discovery and telemetry support are determined by SMD |
-| RBLN Daemon | Implements the required SMD v1 Inventory, Metric and Topology APIs (`:50051` by default) — see [API requirements](api/README.md) |
+| RBLN Daemon | SMD v1 APIs preferred, with v0 compatibility (`:50051` by default) — see [API requirements](api/README.md) |
 | Operating System | Linux kernel with access to `/sys`; when running on Kubernetes ensure `/var/lib/kubelet/pod-resources` is accessible |
 | Kubernetes (optional) | Any version for device-plugin allocations. For DRA allocations, `>= 1.34` — see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
 | Prometheus | Any Prometheus-compatible scraper (Vanilla, Helm chart, or Prometheus Operator). The exporter can run without Prometheus at first, but you need a scraper to persist or visualize the metrics. |
@@ -169,9 +169,9 @@ This update includes breaking changes:
   `MetricService.CreateMetricGroup` permission. To use a pre-provisioned group,
   set `--metric-group-id` and `--create-metric-group=false`. Use `--help` for
   TLS and other connection options.
-- `health` is 0 for READY and 1 for another known lifecycle state. Unknown
-  state has no health sample. `state="not_found"` is replaced by `unknown`,
-  which means unavailable state information, not missing hardware.
+- `health` is 0 for READY and 1 for another known lifecycle state. Unavailable
+  state has no health sample and retains `state="not_found"`, matching SMD's
+  display of unspecified or unreadable state.
 - Unavailable v1 readings are omitted rather than reported as zero. The v0
   scalar API cannot distinguish absent readings from measured zero. The new
   `rbln_npu_collection_success` reports per-device query outcomes separately

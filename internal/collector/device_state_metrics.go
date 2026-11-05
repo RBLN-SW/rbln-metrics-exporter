@@ -10,12 +10,12 @@ import (
 )
 
 var deviceStates = map[string]pb.DeviceState{
-	"ready":   pb.DeviceState_DEVICE_STATE_READY,
-	"busy":    pb.DeviceState_DEVICE_STATE_BUSY,
-	"init":    pb.DeviceState_DEVICE_STATE_INIT,
-	"fault":   pb.DeviceState_DEVICE_STATE_FAULT,
-	"finish":  pb.DeviceState_DEVICE_STATE_FINISH,
-	"unknown": pb.DeviceState_DEVICE_STATE_UNSPECIFIED,
+	"ready":     pb.DeviceState_DEVICE_STATE_READY,
+	"busy":      pb.DeviceState_DEVICE_STATE_BUSY,
+	"init":      pb.DeviceState_DEVICE_STATE_INIT,
+	"fault":     pb.DeviceState_DEVICE_STATE_FAULT,
+	"finish":    pb.DeviceState_DEVICE_STATE_FINISH,
+	"not_found": pb.DeviceState_DEVICE_STATE_UNSPECIFIED,
 }
 
 type DeviceStateMetric struct {
@@ -31,7 +31,7 @@ func NewDeviceStateMetric(podResourceMapper *PodResourceMapper, nodeName string,
 		deviceStatus: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "rbln_npu_device_status",
-				Help: "NPU device state (1 = current state; unknown = no recognized state reported by SMD)",
+				Help: "NPU device state (1 = current state; not_found = no recognized state reported by SMD)",
 			}, labels,
 		),
 		podResourceMapper: podResourceMapper,

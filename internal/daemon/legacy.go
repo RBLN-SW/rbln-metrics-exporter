@@ -83,7 +83,7 @@ func (c *Client) supplementLegacyStates(ctx context.Context, devices []DeviceInf
 	for i := range devices {
 		d := &devices[i]
 		// A future v1 enum value is not a missing field. Preserve it so the
-		// collector reports unknown rather than overriding a newer state.
+		// collector leaves the state unavailable rather than overriding a newer state.
 		if d.DevState != pb.DeviceState_DEVICE_STATE_UNSPECIFIED {
 			continue
 		}
@@ -226,6 +226,8 @@ func (c *Client) collectV0(ctx context.Context) ([]DeviceInfo, map[string]bool, 
 				if n := int64(info.GetPState()); n >= 0 {
 					d.PState = &n
 				}
+			} else {
+				d.CollectionSucceeded = false
 			}
 		} else {
 			missing[d.Name] = true

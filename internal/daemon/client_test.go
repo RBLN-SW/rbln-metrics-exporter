@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -190,6 +191,46 @@ func TestMetricGroupReadOnlyAndPermissionErrors(t *testing.T) {
 			t.Fatal("fell back to default")
 		}
 		s.Mu.Unlock()
+	}
+}
+
+func TestMetricGroupPartialFailuresAreScopedToSelectedGroup(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		for _, targetUnavailable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("existing=%t/targetUnavailable=%t", existing, targetUnavailable), func(t *testing.T) {
+				s := &smdtest.Server{}
+				s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, []*pb.MetricSample{smdtest.Int("rbln0", pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, 123)})
+				c := startFake(t, s)
+				if existing {
+					collect(t, c)
+				}
+				ref := "unrelated-group"
+				if targetUnavailable {
+					ref = DefaultMetricGroupID
+				}
+				s.Mu.Lock()
+				s.GroupUnreachable = []*pb.EntityStatus{{Ref: ref}}
+				created, sampled := len(s.Created), s.SampleCalls
+				s.Mu.Unlock()
+				got, err := c.GetDeviceInfo(context.Background())
+				if targetUnavailable {
+					if err == nil || !strings.Contains(err.Error(), DefaultMetricGroupID) {
+						t.Fatalf("unreachable selected group accepted: %v", err)
+					}
+				} else if err != nil || len(got) != 1 || got[0].MemoryUsedBytes == nil || *got[0].MemoryUsedBytes != 123 {
+					t.Fatalf("unrelated group prevented collection: devices=%+v err=%v", got, err)
+				}
+				s.Mu.Lock()
+				defer s.Mu.Unlock()
+				if targetUnavailable {
+					if len(s.Created) != created || s.SampleCalls != sampled {
+						t.Fatal("unreachable selected group was created or sampled")
+					}
+				} else if len(s.Created) != 1 || s.SampleCalls != sampled+1 {
+					t.Fatalf("incorrect group reuse/creation: created=%d sampled=%d", len(s.Created), s.SampleCalls)
+				}
+			})
+		}
 	}
 }
 
