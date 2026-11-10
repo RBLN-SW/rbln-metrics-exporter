@@ -32,4 +32,6 @@ jobs:
     with:
       kind: ${{ inputs.kind }}
       version: ${{ inputs.version }}
-    secrets: inherit
+    secrets:
+      CLOUD_COMPONENT_RELEASE_APP_PRIVATE_KEY: ${{ secrets.CLOUD_COMPONENT_RELEASE_APP_PRIVATE_KEY }}
+      SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}

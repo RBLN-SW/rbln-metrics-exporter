@@ -8,6 +8,11 @@ on:
         type: boolean
         required: false
         default: true
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_PASSWORD:
+        required: false
     outputs:
       critical:
         description: "Number of fixable CRITICAL vulnerabilities"
