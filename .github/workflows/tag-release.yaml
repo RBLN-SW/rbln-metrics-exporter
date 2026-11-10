@@ -35,4 +35,6 @@ jobs:
     with:
       branch: ${{ github.event.pull_request.base.ref || inputs.branch }}
       kind: ${{ inputs.kind || 'rc' }}
-    secrets: inherit
+    secrets:
+      CLOUD_COMPONENT_RELEASE_APP_PRIVATE_KEY: ${{ secrets.CLOUD_COMPONENT_RELEASE_APP_PRIVATE_KEY }}
+      SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}
