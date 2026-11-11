@@ -23,7 +23,12 @@ jobs:
       images: rbln-metrics-exporter
       # Prefix of the GitHub release title.
       release_name: RBLN Metrics Exporter
-    secrets: inherit
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+      SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}
 
   # Validate the already-published image through piper. Its run overrides
   # disable rebuilding and target the release commit's rc-validation status.

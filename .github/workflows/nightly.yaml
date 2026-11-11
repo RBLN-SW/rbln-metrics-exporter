@@ -17,7 +17,9 @@ jobs:
   # Rebuilds main from scratch so base-image drift shows up as new findings.
   scan:
     uses: ./.github/workflows/image-scan.yaml
-    secrets: inherit
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
     with:
       fail-on-findings: false # keep outputs available for the notify job
 
