@@ -47,6 +47,58 @@ func labelValue(m *dto.Metric, key string) string {
 	return ""
 }
 
+func TestDeviceInfoBoardSerial(t *testing.T) {
+	const boardSerial = "0000000052628053"
+	var devices []*pb.DeviceInfo
+	for _, name := range []string{"rbln0", "rbln1", "rbln0-0", "rbln2"} {
+		d := smdtest.Device(name, name == "rbln0-0")
+		d.Uuid = "uuid-" + name
+		if name != "rbln2" {
+			d.SerialId = boardSerial
+		}
+		if d.IsVf {
+			d.ParentName = "rbln0"
+		}
+		devices = append(devices, d)
+	}
+	s := &smdtest.Server{}
+	s.Set(devices, nil)
+	transport := smdtest.NewTLS(t)
+	addr, stop := smdtest.Serve(t, s, "127.0.0.1:0", transport)
+	t.Cleanup(stop)
+	opts := daemon.DefaultOptions()
+	opts.TLSCA = transport.CAFile
+	client, err := daemon.NewLazyClient(addr, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	r := prometheus.NewRegistry()
+	c := NewNPUCollector(client, r, false, NewNoopPodResourceMapper(), "node")
+	c.Register(r)
+	if err := c.GetMetrics(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devices {
+		m := sampleByDevice(t, r, "rbln_npu_device_info", d.Name)
+		if m == nil || m.GetGauge().GetValue() != 1 || labelValue(m, "uuid") != d.Uuid {
+			t.Fatalf("device identity lost for %s: %v", d.Name, m)
+		}
+		found := false
+		for _, l := range m.GetLabel() {
+			if l.GetName() == "sid" {
+				found = true
+				if l.GetValue() != d.SerialId {
+					t.Fatalf("%s sid=%q want %q", d.Name, l.GetValue(), d.SerialId)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing sid label for %s", d.Name)
+		}
+	}
+}
+
 func TestCollectionVFProfilesAndSeriesLifecycle(t *testing.T) {
 	t.Setenv("PROMETHEUS_METRIC_NAMES", "true")
 	pf := smdtest.Device("rbln0", false)
@@ -253,6 +305,7 @@ func TestPFMetricContractFromKnownReadings(t *testing.T) {
 		t.Run(fmt.Sprint(modern), func(t *testing.T) {
 			t.Setenv("PROMETHEUS_METRIC_NAMES", fmt.Sprint(modern))
 			d := smdtest.Device("rbln0", false)
+			d.SerialId = "0000000052628053"
 			d.DevId = "1234"
 			d.CardName = "test-card"
 			d.Versions.SmcVersion = "test-smc"
@@ -318,6 +371,9 @@ func TestPFMetricContractFromKnownReadings(t *testing.T) {
 				}
 			}
 			info := sampleByDevice(t, reg, "rbln_npu_device_info", d.Name)
+			if labelValue(info, "sid") != d.SerialId {
+				t.Fatalf("missing board serial: %v", info)
+			}
 			if labelValue(info, "compute") != "true" || labelValue(info, "partition_mode") != "none" {
 				t.Fatalf("missing info scope: %v", info)
 			}

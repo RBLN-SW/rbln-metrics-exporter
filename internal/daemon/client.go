@@ -121,7 +121,7 @@ func (c *Client) collectV1(ctx context.Context) ([]DeviceInfo, map[string]bool, 
 		if c.foreignDriver(d.GetPciBusId()) {
 			continue
 		}
-		di := DeviceInfo{UUID: d.GetUuid(), Name: d.GetName(), DeviceID: d.GetDevId(), Card: d.GetCardName(), PCIBusID: d.GetPciBusId(), IsVF: d.GetIsVf(), ParentName: d.GetParentName(), Compute: d.NpuId != nil, DevState: d.GetState(), Topology: topologies[d.GetName()]}
+		di := DeviceInfo{UUID: d.GetUuid(), SID: d.GetSerialId(), Name: d.GetName(), DeviceID: d.GetDevId(), Card: d.GetCardName(), PCIBusID: d.GetPciBusId(), IsVF: d.GetIsVf(), ParentName: d.GetParentName(), Compute: d.NpuId != nil, DevState: d.GetState(), Topology: topologies[d.GetName()]}
 		di.CollectionSucceeded = !missing[di.Name] && !topologyFailures[di.Name]
 		versions := d.GetVersions()
 		if versions == nil {

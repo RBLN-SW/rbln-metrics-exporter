@@ -22,6 +22,7 @@ const (
 
 	state = "state"
 
+	sid           = "sid"
 	smcVersion    = "smc_version"
 	pciBusID      = "pci_bus_id"
 	numaNode      = "numa_node"
@@ -54,6 +55,7 @@ func labelNames(includePodLabels bool) []string {
 }
 
 var deviceInfoOnlyLabels = []string{
+	sid,
 	smcVersion,
 	pciBusID,
 	numaNode,
@@ -97,6 +99,7 @@ func buildLabels(device daemon.DeviceInfo, nodeName string, podResourceInfo map[
 func buildDeviceInfoLabels(device daemon.DeviceInfo, nodeName string, podResourceInfo map[DeviceName]PodResourceInfo, includePodLabels bool) prometheus.Labels {
 	labels := buildLabels(device, nodeName, podResourceInfo, includePodLabels)
 
+	labels[sid] = device.SID
 	labels[smcVersion] = device.SMCVersion
 	labels[pciBusID] = device.PCIBusID
 	labels[isVF] = strconv.FormatBool(device.IsVF)
