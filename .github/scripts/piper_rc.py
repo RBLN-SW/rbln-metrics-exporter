@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Trigger an RNPM RC run and wait for its existing OB/GitHub verdict.
+"""Trigger an piper RC run and wait for its existing OB/GitHub verdict.
 
-No image build, release publication, custom test verdict, or saved RNPM mutation.
+No image build, release publication, custom test verdict, or saved piper mutation.
 Configuration beside this script identifies the repository and registered bundle.
 """
 import argparse
@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CONFIG = Path(__file__).with_name("rnpm-rc.json")
+CONFIG = Path(__file__).with_name("piper-rc.json")
 PIPELINE_FIELDS = (
     "key", "name", "description", "cluster_id", "pool_id", "cluster_grace_minutes",
     "keep_cluster", "destroy_cluster", "sentinel_ref", "repo_ref", "enabled",
@@ -38,7 +38,7 @@ FINAL_STATES = {
 class APIError(RuntimeError):
     def __init__(self, method, path, status=None):
         self.status = status
-        super().__init__(f"RNPM {method} {path} failed" +
+        super().__init__(f"piper {method} {path} failed" +
                          (f" (HTTP {status})" if status else " (transport error)"))
 
 
@@ -51,11 +51,11 @@ class Client:
     def __init__(self, url, token):
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme != "https" or not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
-            raise ValueError("RNPM_URL must be an HTTPS origin")
+            raise ValueError("PIPER_URL must be an HTTPS origin")
         if parsed.path not in ("", "/"):
-            raise ValueError("RNPM_URL must not contain an API path")
+            raise ValueError("PIPER_URL must not contain an API path")
         if not token.strip():
-            raise ValueError("GitHub Actions secret RNPM_TOKEN is required")
+            raise ValueError("GitHub Actions secret PIPER_TOKEN is required")
         self.url, self.token = url.rstrip("/"), token
         self.opener = urllib.request.build_opener(NoRedirect())
 
@@ -98,7 +98,7 @@ def request_payload(config, env, pipelines):
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("RC_SHA must be the full release-tag commit SHA")
     if required(env, "GITHUB_REPOSITORY").lower() != config["repository"].lower():
-        raise ValueError("The workflow repository does not match rnpm-rc.json")
+        raise ValueError("The workflow repository does not match piper-rc.json")
     registry = required(env, "HARBOR_REGISTRY").rstrip("/")
     host, slash, project = registry.partition("/")
     if not slash or not project or "://" in registry or any(c.isspace() for c in registry):
@@ -110,7 +110,7 @@ def request_payload(config, env, pipelines):
     chart = None
     if matrix:
         # RC chart values select Operator, Validator and released operand images.
-        # Kernel-driver/SMD/compiler pins remain hardware-specific RNPM settings.
+        # Kernel-driver/SMD/compiler pins remain hardware-specific piper settings.
         common.update({f"SENTINEL_{p}_{field}": ""
                        for p in ("OPERATOR", "VALIDATOR")
                        for field in ("REGISTRY", "REPOSITORY", "VERSION", "PULL_POLICY")})
@@ -148,9 +148,9 @@ def request_payload(config, env, pipelines):
     if members:
         overrides["members"] = members
     return {
-        "branch": env.get("RNPM_VALIDATE_BRANCH", "").strip() or config["execution_branch"]
+        "branch": env.get("PIPER_VALIDATE_BRANCH", "").strip() or config["execution_branch"]
                   if matrix else required(env, "RC_BRANCH"),
-        "commit": env.get("RNPM_VALIDATE_COMMIT", "").strip() or "HEAD" if matrix else sha,
+        "commit": env.get("PIPER_VALIDATE_COMMIT", "").strip() or "HEAD" if matrix else sha,
         "message": f"rc-validation {tag}",
         "meta_data": {"rc_tag": tag, "rc_repository": config["repository"], "rc_sha": sha},
         "overrides": overrides,
@@ -158,16 +158,16 @@ def request_payload(config, env, pipelines):
 
 
 def prepare(client, config, env):
-    bundle_id = env.get("RNPM_RC_BUNDLE_ID", "").strip() or config["bundle_id"]
+    bundle_id = env.get("PIPER_RC_BUNDLE_ID", "").strip() or config["bundle_id"]
     if not re.fullmatch(r"[A-Za-z0-9_-]+", bundle_id):
-        raise ValueError("Invalid RNPM_RC_BUNDLE_ID")
+        raise ValueError("Invalid PIPER_RC_BUNDLE_ID")
     root = f"/api/bundles/{bundle_id}"
     bundle = client.request("GET", root)
     if bundle.get("ob_pipeline") != config["ob_pipeline"]:
-        raise ValueError("RNPM bundle is not linked to the expected OB pipeline")
+        raise ValueError("piper bundle is not linked to the expected OB pipeline")
     repo = client.request("GET", "/api/repositories/" + bundle["repository_id"])
     if (repo["owner"] + "/" + repo["name"]).lower() != config["execution_repository"].lower():
-        raise ValueError("RNPM bundle belongs to a different execution repository")
+        raise ValueError("piper bundle belongs to a different execution repository")
     pipelines = [client.request("GET", "/api/pipelines/" + member["id"])
                  for member in bundle["pipelines"]]
     payload = request_payload(config, env, pipelines)
@@ -177,10 +177,10 @@ def prepare(client, config, env):
 def ensure_bootstrap(client, root):
     bootstrap = client.request("GET", root + "/bootstrap")
     if not bootstrap.get("matches"):
-        raise ValueError("Merge the RNPM bootstrap into the execution branch and sync the RNPM repository")
+        raise ValueError("Merge the piper bootstrap into the execution branch and sync the piper repository")
     ob = client.request("GET", root + "/ob/bootstrap")
     if not ob.get("matches"):
-        raise ValueError("The OB entry point still uses the old pipeline; switch it to the RNPM bootstrap")
+        raise ValueError("The OB entry point still uses the old pipeline; switch it to the piper bootstrap")
 
 
 def cancel_superseded(client, root, config, payload):
@@ -212,7 +212,7 @@ def cancel_superseded(client, root, config, payload):
 
 def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monotonic, sleep=time.sleep):
     deadline = clock() + timeout
-    number, run_id = build["number"], build["env"]["RNPM_RUN"]
+    number, run_id = build["number"], build["env"]["PIPER_RUN"]
     target = payload["overrides"]["status_target"]
     previous = None
     while clock() < deadline:
@@ -225,11 +225,11 @@ def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monot
             sleep(min(poll, max(0, deadline - clock())))
             continue
         if current.get("number") != number or run.get("id") != run_id or run.get("ob_build") != number:
-            raise ValueError("RNPM returned a different build/run")
+            raise ValueError("piper returned a different build/run")
         delivery = run.get("status_delivery") or {}
         state = current.get("state", "unknown")
         if state != previous:
-            print(f"RNPM build #{number}: {state}", flush=True)
+            print(f"piper build #{number}: {state}", flush=True)
             previous = state
         actual_target = delivery.get("target") or {}
         if (actual_target.get("repository", "").lower() == target["repository"].lower()
@@ -241,15 +241,15 @@ def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monot
             if verdict and delivered == verdict and not delivery.get("error"):
                 return state, verdict
         sleep(min(poll, max(0, deadline - clock())))
-    raise TimeoutError(f"Timed out waiting for RNPM build #{number} and its rc-validation delivery: {build['url']}")
+    raise TimeoutError(f"Timed out waiting for piper build #{number} and its rc-validation delivery: {build['url']}")
 
 
 def run(client, config, env, dry_run=False):
     root, bundle, payload = prepare(client, config, env)
     # Preview does not create a run, dispatch jobs or publish commit statuses.
     preview = client.request("POST", root + "/preview", payload["overrides"])
-    if "yaml" not in preview or "RNPM_COMMIT_TAG_ENV:" in preview["yaml"]:
-        raise ValueError("RNPM must support per-run build disabling (version 0.73.0 or newer)")
+    if "yaml" not in preview or "PIPER_COMMIT_TAG_ENV:" in preview["yaml"]:
+        raise ValueError("piper must support per-run build disabling (version 0.73.0 or newer)")
     if dry_run:
         print(json.dumps(payload, indent=2))
         return 0
@@ -259,23 +259,23 @@ def run(client, config, env, dry_run=False):
     try:
         build = client.request("POST", root + "/trigger", payload)
     except (APIError, ValueError) as exc:
-        raise RuntimeError(f"{exc}. Trigger was not retried; inspect RNPM Runs before retrying.") from None
-    run_id = build.get("env", {}).get("RNPM_RUN", "")
+        raise RuntimeError(f"{exc}. Trigger was not retried; inspect piper Runs before retrying.") from None
+    run_id = build.get("env", {}).get("PIPER_RUN", "")
     number = build.get("number")
     url = build.get("url", "")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", run_id) or not isinstance(number, int) or number < 1:
-        raise ValueError("Trigger returned no valid run/build identity; inspect RNPM Runs before retrying")
+        raise ValueError("Trigger returned no valid run/build identity; inspect piper Runs before retrying")
     if not url.startswith("https://") or "\n" in url or "\r" in url:
-        raise ValueError("Trigger returned no valid build URL; inspect RNPM Runs before retrying")
-    print(f"RC validation: {url} (RNPM run {run_id})", flush=True)
+        raise ValueError("Trigger returned no valid build URL; inspect piper Runs before retrying")
+    print(f"RC validation: {url} (piper run {run_id})", flush=True)
     if env.get("GITHUB_OUTPUT"):
         with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.write(f"build_url={url}\nrun_id={run_id}\nbuild_number={number}\n")
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write(f"RC validation for {env['RC_TAG']}: {url}\n\nRNPM run: {run_id}\n")
+            summary.write(f"RC validation for {env['RC_TAG']}: {url}\n\npiper run: {run_id}\n")
     state, verdict = wait_result(client, root, build, payload, config["timeout_seconds"])
-    print(f"RNPM/OB result: {state}; rc-validation delivery: {verdict}", flush=True)
+    print(f"piper/OB result: {state}; rc-validation delivery: {verdict}", flush=True)
     return 0 if verdict == "success" else 1
 
 
@@ -285,8 +285,8 @@ def main():
     args = parser.parse_args()
     try:
         config = json.loads(CONFIG.read_text())
-        client = Client(os.environ.get("RNPM_URL", "https://rnpm.k8s.rebellions.in"),
-                        os.environ.get("RNPM_TOKEN", ""))
+        client = Client(os.environ.get("PIPER_URL", "https://piper.k8s.rebellions.in"),
+                        os.environ.get("PIPER_TOKEN", ""))
         return run(client, config, os.environ, args.dry_run)
     except (APIError, ValueError, RuntimeError, TimeoutError, KeyError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
