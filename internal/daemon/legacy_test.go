@@ -103,6 +103,11 @@ func TestLegacyOnlyDaemonCollectsPFAndVF(t *testing.T) {
 	if len(got) != 2 || got[0].Compute || !got[1].Compute {
 		t.Fatalf("legacy inventory: %+v", got)
 	}
+	for _, d := range got {
+		if d.SID != "" {
+			t.Fatalf("legacy API has no board serial: %+v", d)
+		}
+	}
 	if got[0].MemoryTotalBytes != nil || got[0].Utilization != nil || *got[0].Power != 50 || *got[0].Temperature != 35 || *got[0].PCIeLinkWidth != 16 {
 		t.Fatalf("PF scope/units: %+v", got[0])
 	}

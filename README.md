@@ -325,7 +325,7 @@ rbln_npu_health{hostname="worker-a",name="rbln0-0",pod="consumer"} 0
 # TYPE rbln_npu_collection_success gauge
 rbln_npu_collection_success{hostname="worker-a",name="rbln0-0",pod="consumer"} 1
 # TYPE rbln_npu_device_info gauge
-rbln_npu_device_info{hostname="worker-a",name="rbln0-0",pod="consumer",is_vf="true",parent_name="rbln0",num_vfs="0",partition_mode="vf1",compute="true"} 1
+rbln_npu_device_info{hostname="worker-a",name="rbln0-0",sid="0000000052628053",pod="consumer",is_vf="true",parent_name="rbln0",num_vfs="0",partition_mode="vf1",compute="true"} 1
 ```
 
 ---
