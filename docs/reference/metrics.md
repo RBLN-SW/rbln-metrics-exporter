@@ -31,6 +31,7 @@ reference:
 
 | Label | Meaning |
 | --- | --- |
+| `sid` | Board serial reported by SMD v1, preserving leading zeros; empty when unavailable or collecting through v0 |
 | `compute` | `true` for a compute device eligible for memory/utilization metrics and workload attribution; `false` for a PF hosting VFs |
 | `partition_mode` | `none` for an unpartitioned compute PF, `hosting` for a PF hosting VFs, or `vf1`/`vf4` for a VF with a known parent profile; empty when unknown |
 
@@ -39,6 +40,17 @@ enabled on that function, so a VF reports `0`. VF profiles require local PCI sys
 access and are unavailable in gateway mode.
 
 Use `hostname` and `name` to distinguish functions; a VF may inherit its PF's UUID.
+The `sid` label belongs only to `rbln_npu_device_info`. Multiple NPUs on one card
+and its VFs can share the same SID, so it identifies a board rather than a function.
+
+For example, a VF with a reported board serial exports the following info series
+(labels shortened for readability):
+
+```text
+# TYPE rbln_npu_device_info gauge
+rbln_npu_device_info{hostname="worker-a",name="rbln0-0",sid="0000000052628053",pod="consumer",is_vf="true",parent_name="rbln0",num_vfs="0",partition_mode="vf1",compute="true"} 1
+```
+
 Memory and utilization are exported for compute devices. Temperature, power, and
 PCIe link readings remain PF-only. See [Check NPU metrics](../guides/check-metrics.md#3-check-workload-attribution)
 for Kubernetes workload labels and shared-device attribution.
