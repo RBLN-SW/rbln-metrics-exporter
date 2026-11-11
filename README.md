@@ -362,5 +362,5 @@ Monitor confidently and keep your Rebellions NPUs healthy!
 
 ## RC validation
 
-Release candidates are tested through RNPM using their published images.
+Release candidates are tested through piper using their published images.
 See [RC validation setup and image inputs](docs/rc-validation.md).

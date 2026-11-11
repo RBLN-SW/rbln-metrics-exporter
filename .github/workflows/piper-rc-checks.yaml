@@ -1,0 +1,24 @@
+name: piper RC contract
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/piper*'
+      - '.github/scripts/test_piper_rc.py'
+      - '.github/workflows/release.yaml'
+      - '.github/workflows/piper-rc-checks.yaml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/piper*'
+      - '.github/scripts/test_piper_rc.py'
+      - '.github/workflows/release.yaml'
+      - '.github/workflows/piper-rc-checks.yaml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check RC request and result handling without external calls
+        run: python3 -m unittest discover -s .github/scripts -p 'test_piper_rc.py' -v

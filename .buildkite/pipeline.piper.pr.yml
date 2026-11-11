@@ -1,0 +1,14 @@
+env:
+  PIPER_URL: https://piper.k8s.rebellions.in
+
+agents:
+  queue: k8s
+
+steps:
+  - label: ":package: pr › upload"
+    key: piper-bundle-pr
+    secrets:
+      PIPER_TOKEN: PIPER_TOKEN
+    command: |
+      curl -fsSL -H "Authorization: Bearer $$PIPER_TOKEN" \
+        "${PIPER_URL}/api/v1/bundles/RBLN-SW/rbln-metrics-exporter/pr?run=$${PIPER_RUN:-}" | buildkite-agent pipeline upload

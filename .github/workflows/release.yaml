@@ -12,7 +12,7 @@ on:
 permissions:
   contents: write
   issues: write # GA deletes the "backport release-X.Y.Z" label
-  statuses: read # the release kit reads the status reported by RNPM
+  statuses: read # the release kit reads the status reported by piper
 
 jobs:
   release:
@@ -25,10 +25,10 @@ jobs:
       release_name: RBLN Metrics Exporter
     secrets: inherit
 
-  # Validate the already-published image through RNPM. Its run overrides
+  # Validate the already-published image through piper. Its run overrides
   # disable rebuilding and target the release commit's rc-validation status.
   rc-validate:
-    name: RNPM RC validation
+    name: piper RC validation
     needs: release
     if: needs.release.outputs.kind == 'rc'
     runs-on: rbln-sw-k8s-general
@@ -40,16 +40,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release.outputs.sha }}
-      - name: Trigger RNPM and wait for its RC verdict
+      - name: Trigger piper and wait for its RC verdict
         id: validate
         env:
-          RNPM_URL: ${{ vars.RNPM_URL || 'https://rnpm.k8s.rebellions.in' }}
-          RNPM_TOKEN: ${{ secrets.RNPM_TOKEN }}
-          RNPM_RC_BUNDLE_ID: ${{ vars.RNPM_RC_BUNDLE_ID }}
+          PIPER_URL: ${{ vars.PIPER_URL || 'https://piper.k8s.rebellions.in' }}
+          PIPER_TOKEN: ${{ secrets.PIPER_TOKEN }}
+          PIPER_RC_BUNDLE_ID: ${{ vars.PIPER_RC_BUNDLE_ID }}
           RC_TAG: ${{ github.ref_name }}
           RC_SHA: ${{ needs.release.outputs.sha }}
           RC_BRANCH: ${{ needs.release.outputs.branch }}
           HARBOR_REGISTRY: ${{ vars.CLOUD_COMPONENT_HARBOR_REGISTRY }}
           SENTINEL_REF: ${{ vars.RC_VALIDATION_SENTINEL_REF }}
           OPERATOR_REF: ${{ vars.RC_VALIDATION_OPERATOR_REF }}
-        run: python3 .github/scripts/rnpm_rc.py
+        run: python3 .github/scripts/piper_rc.py

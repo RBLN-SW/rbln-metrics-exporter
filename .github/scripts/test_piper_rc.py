@@ -1,11 +1,11 @@
-"""Offline contract tests: all RNPM requests are intercepted."""
+"""Offline contract tests: all piper requests are intercepted."""
 import copy
 import io
 import json
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
-import rnpm_rc as rc
+import piper_rc as rc
 
 SHA = "a" * 40
 ENV = {
@@ -32,7 +32,7 @@ PIPELINE = {
     "commit_status": {"enabled": True, "context": "component-ci"},
     "scenarios": [{"family": "components/device_plugin", "subtests": []}],
 }
-BUILD = {"number": 42, "url": "https://ob.example/builds/42", "env": {"RNPM_RUN": "run42"}}
+BUILD = {"number": 42, "url": "https://ob.example/builds/42", "env": {"PIPER_RUN": "run42"}}
 
 
 class Fake:
@@ -195,18 +195,18 @@ class ExecutionTests(unittest.TestCase):
             rc.run(api, CONFIG, ENV)
         self.assertEqual(sum(path.endswith("/trigger") for _, path, _ in api.calls), 1)
 
-    def test_old_rnpm_build_override_is_rejected(self):
+    def test_old_piper_build_override_is_rejected(self):
         api = Fake()
         original = api.request
         def request(method, path, payload=None):
             if path.endswith("/preview"):
-                return {"yaml": "env:\n  RNPM_COMMIT_TAG_ENV: SENTINEL_DEVICE_PLUGIN_IMAGE_TAG\n"}
+                return {"yaml": "env:\n  PIPER_COMMIT_TAG_ENV: SENTINEL_DEVICE_PLUGIN_IMAGE_TAG\n"}
             return original(method, path, payload)
         api.request = request
         with self.assertRaises(ValueError):
             rc.run(api, CONFIG, ENV)
 
-    def test_uses_existing_rnpm_ob_verdict_for_workflow_result(self):
+    def test_uses_existing_piper_ob_verdict_for_workflow_result(self):
         for state, verdict, expected in [("passed", "success", 0), ("failed", "failure", 1),
                                           ("canceled", "error", 1)]:
             with self.subTest(state=state), patch.object(rc, "wait_result", return_value=(state, verdict)):
@@ -263,8 +263,8 @@ class ExecutionTests(unittest.TestCase):
                          ["/api/ob/pipelines/pr-device/builds/1/cancel"])
 
     def test_http_client_rejects_insecure_origins_and_missing_credentials(self):
-        for url, token in [("http://rnpm.example", "secret"), ("https://rnpm.example/api", "secret"),
-                           ("https://user@rnpm.example", "secret"), ("https://rnpm.example", "")]:
+        for url, token in [("http://piper.example", "secret"), ("https://piper.example/api", "secret"),
+                           ("https://user@piper.example", "secret"), ("https://piper.example", "")]:
             with self.assertRaises(ValueError):
                 rc.Client(url, token)
 
