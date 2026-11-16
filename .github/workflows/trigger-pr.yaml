@@ -2,15 +2,14 @@ name: PR Validation
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
-      # Backport PRs need the same required checks as main PRs. The obedients PR
-      # pipeline's branch filter must include release-* as well (obedients-side setting).
       - "release-*"
 
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,6 +18,25 @@ permissions:
   security-events: write # image-scan.yaml uploads SARIF to code scanning
 
 jobs:
+  changes:
+    name: Classify PR changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      needs_ci: ${{ steps.classify.outputs.needs_ci }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Test PR routing and gate decisions
+        run: python3 -m unittest discover -s .github/scripts -p 'test_pr_ci.py' -v
+      - name: Classify the complete PR diff
+        id: classify
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/pr_ci.py changes
+
   pr-title-validation:
     runs-on: ubuntu-latest
     steps:
@@ -45,16 +63,53 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   code-check:
-    needs: pr-title-validation
+    needs: [pr-title-validation, changes]
+    if: needs.changes.outputs.needs_ci == 'true'
     uses: ./.github/workflows/go-checks.yaml
   go-build:
-    needs: pr-title-validation
+    needs: [pr-title-validation, changes]
+    if: needs.changes.outputs.needs_ci == 'true'
     uses: ./.github/workflows/go-build.yaml
   image-scan:
-    needs: [code-check, go-build]
+    needs: [changes, code-check, go-build]
+    if: needs.changes.outputs.needs_ci == 'true'
     uses: ./.github/workflows/image-scan.yaml
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
     with:
       fail-on-findings: true
+
+  piper:
+    name: Piper PR validation
+    needs: [changes, pr-title-validation]
+    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && needs.changes.outputs.needs_ci == 'true' && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: rbln-sw-k8s-general
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Run the existing Piper bundle for this PR head commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PIPER_URL: ${{ vars.PIPER_URL || 'https://piper.k8s.rebellions.in' }}
+          PIPER_TOKEN: ${{ secrets.PIPER_TOKEN }}
+        run: python3 .github/scripts/pr_ci.py run
+
+  pr-ci-gate:
+    name: PR CI Gate
+    needs: [changes, piper]
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Require the applicable PR validation
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/pr_ci.py gate
