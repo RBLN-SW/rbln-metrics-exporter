@@ -1,7 +1,8 @@
 name: release
 
 # Publish from a version tag: vX.Y.Z-rcN -> Harbor, vX.Y.Z -> docker.io by
-# digest. Tags are created by cut-release / tag-release only.
+# digest, with the same GA image tags retained in Harbor.
+# Tags are created by cut-release / tag-release only.
 # Everything else lives in the release kit: https://github.com/RBLN-SW/cloud-component-release-kit
 
 on:
@@ -29,6 +30,20 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
       SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}
+
+  # Internal Harbor copy runs after the public release has completed.
+  ga-harbor-images:
+    name: GA images -> Harbor
+    needs: release
+    if: needs.release.outputs.kind == 'ga'
+    uses: RBLN-SW/cloud-component-release-kit/.github/workflows/mirror-ga-images.yaml@v1
+    with:
+      images: rbln-metrics-exporter
+      tag: ${{ github.ref_name }}
+      digests: ${{ needs.release.outputs.digests }}
+    secrets:
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
 
   # Validate the already-published image through piper. Its run overrides
   # disable rebuilding and target the release commit's rc-validation status.
