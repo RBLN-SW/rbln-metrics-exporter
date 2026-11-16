@@ -14,7 +14,7 @@ jobs:
         id: versions
         run: |
           GOLANG_VERSION=$(grep '^GOLANG_VERSION' versions.mk | cut -d'=' -f2 | tr -d ' ?')
-          echo "golang-version=${GOLANG_VERSION}" >> $GITHUB_OUTPUT
+          echo "golang-version=${GOLANG_VERSION}" >> "$GITHUB_OUTPUT"
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
