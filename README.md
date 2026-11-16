@@ -1,366 +1,54 @@
 # RBLN Metrics Exporter
 
-The RBLN Metrics Exporter exposes detailed telemetry for RBLN NPUs in [Prometheus](https://prometheus.io/) format so that you can build Grafana dashboards, alert on thermal or utilization anomalies, and correlate accelerator health with Kubernetes workloads.
+**Monitor Rebellions NPUs with Prometheus.**
 
-For installation, configuration and usage, see the [Kubernetes documentation](https://docs.rbln.ai/v0.12.0/software/system_management/kubernetes/index.html).
+[Get started](#get-started) · [Guides](#guides) · [Metrics](docs/reference/metrics.md) · [Releases](https://github.com/RBLN-SW/rbln-metrics-exporter/releases)
 
----
+The exporter provides NPU utilization, memory, temperature, power, and health
+metrics. On Kubernetes, it also associates allocated devices with their Pods.
+Use the metrics in Prometheus queries, Grafana dashboards, and alerts.
 
-## Key Features
+## Get started
 
-- **Native Prometheus endpoint** on `/metrics` served by a lightweight Go HTTP server.
-- **Two collection modes**: `local` (default) collects from the node-local RBLN daemon on a schedule; `gateway` follows the Prometheus [multi-target exporter pattern](https://prometheus.io/docs/guides/multi-target-exporter/) so a single central instance can collect from many remote hosts — see [Gateway Mode](#gateway-mode-multi-target).
-- **NPU-aware scheduling** via DaemonSet affinities that target nodes labeled by NPU Feature Discovery add-on.
-- **Kubernetes context labels** (namespace, pod, container) populated by integrating with `kubelet` pod-resources API, for devices allocated by either the [device plugin](https://github.com/RBLN-SW/k8s-device-plugin) or the [DRA driver](https://github.com/RBLN-SW/rbln-k8s-dra-driver).
-- **Binary or container deployment** with configurable scrape interval, port, and daemon gRPC endpoint.
+Choose the guide for your environment:
 
----
-
-## Compatibility and Prerequisites
-
-| Requirement | Details |
+| Environment | Start here |
 | --- | --- |
-| RBLN Driver | Compatible with the deployed SMD; device discovery and telemetry support are determined by SMD |
-| RBLN Daemon | SMD v1 APIs preferred, with v0 compatibility (`:50051` by default) — see [API requirements](api/README.md) |
-| Operating System | Linux kernel with access to `/sys`; when running on Kubernetes ensure `/var/lib/kubelet/pod-resources` is accessible |
-| Kubernetes (optional) | Any version for device-plugin allocations. For DRA allocations, `>= 1.34` — see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
-| Prometheus | Any Prometheus-compatible scraper (Vanilla, Helm chart, or Prometheus Operator). The exporter can run without Prometheus at first, but you need a scraper to persist or visualize the metrics. |
-| Grafana (optional) | For dashboards that visualize the exported metrics |
+| Kubernetes | [Deploy through the NPU Operator](https://docs.rbln.ai/latest/software/system_management/kubernetes/metrics_exporter.html) |
+| Bare metal | [Run the exporter locally](docs/guides/run-locally.md) |
+| Multiple remote hosts | [Set up gateway mode](https://docs.rbln.ai/latest/software/system_management/kubernetes/metrics_exporter_gateway_mode.html) |
 
----
+After deployment, [check the metrics endpoint](docs/guides/check-metrics.md).
+A successful collection reports `rbln_up 1`.
 
-## Quick Start (Standalone Binary)
+## Guides
 
-1. Build the binary locally via `make build`, which outputs `./bin/rbln-metrics-exporter`.
-2. Ensure the host can reach the RBLN daemon (default `127.0.0.1:50051`).
-3. Run the exporter:
-   ```bash
-   $ ./rbln-metrics-exporter \
-       --port 9090 \
-       --interval 5 \
-       --rbln-daemon-url 127.0.0.1:50051
-   ```
-4. Verify the endpoint:
-   ```bash
-   $ curl http://[NODE_IP]:9090/metrics
-   ```
-
----
-
-## Command-Line Interface
-
-```text
-$ rbln-metrics-exporter --help
-Expose RBLN device metrics via Prometheus
-
-Usage:
-  rbln-metrics-exporter [flags]
-
-Flags:
-  -h, --help                     help for rbln-metrics-exporter
-      --interval int             Interval of collecting metrics (1-60 seconds) (default 5)
-      --kubernetes-mode string   Kubernetes mode: auto, on, off (default "auto")
-      --mode string              Exporter mode: local (collect from the local daemon on a schedule), gateway (collect from the rbln-smd given by /metrics?target=<host:port> on each scrape) (default "local")
-      --node-name string         Name of the node (defaults to NODE_NAME env or hostname)
-      --oneshot                  Collect once and exit
-      --port int                 Port to listen for requests (default 9090)
-      --rbln-daemon-url string   Endpoint to RBLN daemon grpc server (local mode only) (default "127.0.0.1:50051")
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `RBLN_METRICS_EXPORTER_MODE` | `local` | Exporter mode: `local` or `gateway` |
-| `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL` | `127.0.0.1:50051` | gRPC endpoint of the RBLN daemon (local mode only) |
-| `RBLN_METRICS_EXPORTER_PORT` | `9090` | Port for the `/metrics` HTTP server |
-| `RBLN_METRICS_EXPORTER_INTERVAL` | `5` | Collection interval in seconds (1–60) |
-| `RBLN_METRICS_EXPORTER_KUBERNETES_MODE` | `auto` | Kubernetes integration: `auto`, `on`, or `off` |
-| `RBLN_METRICS_EXPORTER_ONESHOT` | `false` | When `true`, scrape once and exit |
-| `NODE_NAME` | auto-detected | Overrides the node label inserted into metrics |
-| `RBLN_METRICS_EXPORTER_LOG_LEVEL` | `info` | Log level: `error`, `warning`, `info`, `debug`, or `trace` |
-| `RBLN_METRICS_EXPORTER_LOG_FORMAT` | `json` | Log output format: `json` or `text` |
-
-> `RBLN_METRICS_EXPORTER_LOG_LEVEL=warning` is emitted in logs as `"level":"warn"` (slog's canonical spelling) — write dashboard/alert filters against `warn`, not `warning`.
-
-> **For log pipelines:** records are single-line JSON (NDJSON) on **stdout**. The timestamp key is `ts` in RFC3339Nano with variable fractional digits — set Fluent Bit's JSON parser to `Time_Key ts`; promtail's `RFC3339Nano` format works as-is. The message key is `msg`, the error key is `err`, and `caller` (`pkg/file.go:N`) appears only at `debug`/`trace`. Keep `json` in-cluster; `text` is meant for local debugging.
-
-
----
-
-## Kubernetes Deployment
-
-### Step 1: Deploy the DaemonSet
-
-Apply the reference manifest:
-
-```bash
-$ kubectl apply -f https://raw.githubusercontent.com/rebellions-sw/rbln-metrics-exporter/refs/heads/main/deployments/kubernetes/daemonset.yaml
-```
-
-Highlights of the manifest:
-
-- Pins scheduling with `nodeAffinity` requiring `rebellions.ai/npu.deploy.metrics-exporter=true`. If you depend on the `rebellions.ai/npu.present=true` label emitted by [rbln-npu-feature-discovery](https://github.com/rebellions-sw/rbln-npu-feature-discovery), swap in the bundled snippet:
-  ```yaml
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-          - matchExpressions:
-              - key: rebellions.ai/npu.present
-                operator: In
-                values:
-                  - "true"
-  ```
-- Mounts:
-  - `/var/lib/kubelet/pod-resources` (read-only) to correlate device allocations with workloads.
-  - `/sys` for low-level device metadata.
-- Set the `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL` environment variable so that it connects to the local RBLN Daemon on each node.
-
-### Step 2: Install Prometheus
-
-Deploy Prometheus using Helm (`prometheus-community/kube-prometheus-stack`) or the [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator). The exporter can run without Prometheus, but metrics will only be stored once the scraper is active.
-
-### Step 3: Add a ServiceMonitor
-
-If you installed Prometheus Operator, create the resource below (update the namespace/labels to match your stack):
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: rbln-metrics-exporter
-  namespace: monitoring
-  labels:
-    release: prometheus
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: rbln-metrics-exporter
-  namespaceSelector:
-    matchNames:
-      - rbln-system
-  endpoints:
-    - port: metrics
-      path: /metrics
-      interval: 30s
-      scrapeTimeout: 10s
-```
-
-Apply with `kubectl apply -f servicemonitor.yaml`.
-
-### Step 4 (Optional): Grafana Dashboards
-
-Deploy Grafana via Helm or the Grafana Operator and import dashboards that visualize:
-
-- Temperature vs. power draw per card
-- Memory utilization by namespace/pod
-- Device readiness (`health=0` when READY) and fault-state alarms (`device_status{state="fault"}=1`)
-
-### SMD API compatibility and SR-IOV notes
-
-This update includes breaking changes:
-
-- The exporter prefers v1 and uses v0 collection when a required v1 RPC is
-  unimplemented. Missing v1 lifecycle state is supplemented from v0
-  `dev_status` when available. Known v1 states are preserved; there is no
-  product-specific or user-selected API mode. See [API requirements](api/README.md).
-- For v1 collection, the exporter creates a clock-free metric group, requiring
-  `MetricService.CreateMetricGroup` permission. To use a pre-provisioned group,
-  set `--metric-group-id` and `--create-metric-group=false`. Use `--help` for
-  TLS and other connection options.
-- `health` is 0 for READY and 1 for another known lifecycle state. Unavailable
-  state has no health sample and retains `state="not_found"`, matching SMD's
-  display of unspecified or unreadable state.
-- Unavailable v1 readings are omitted rather than reported as zero. The v0
-  scalar API cannot distinguish absent readings from measured zero. The new
-  `rbln_npu_collection_success` reports per-device query outcomes separately
-  from readiness; successful queries do not guarantee every metric is available.
-- Native VFs gain memory/utilization and Pod attribution. Hosting PFs no longer
-  export compute memory/utilization; temperature, power and PCIe link readings
-  remain PF-only to avoid duplicate physical measurements.
-- `device_info` adds `partition_mode` and `compute`; `num_vfs` is empty when
-  unknown. UUIDs can be inherited, so identify functions by `hostname,name`.
-
-### Dynamic Resource Allocation (DRA)
-
-The exporter attributes devices to workloads through the kubelet pod-resources API, which reports device-plugin and DRA allocations in separate fields. Both are read, so a cluster running the device plugin and the DRA driver side by side gets Kubernetes labels on every device either of them allocated. No extra mount, RBAC, or configuration is needed.
-
-DRA attribution requires **Kubernetes `>= 1.34`**, the same floor as the [DRA driver](https://github.com/RBLN-SW/rbln-k8s-dra-driver) itself. Both kubelet feature gates it depends on — `DynamicResourceAllocation` (GA) and `KubeletPodResourcesDynamicResources` (Beta) — are enabled by default there, so no kubelet flags are needed.
-
-Older clusters are not a matter of turning those gates on. The pod-resources API gained the `driver_name` and `device_name` fields this exporter reads only in Kubernetes 1.31, so on 1.27 – 1.30 the gate can be enabled and every DRA device still goes unattributed. The DRA driver in turn targets the `resource.k8s.io/v1` API that reached GA in 1.34.
-
-A metric series carries one set of pod labels, but DRA lets one device have more than one claimant. The exporter therefore picks a single claimant per device, always the same one across scrapes so a device's series does not split:
-
-- **Containers of one pod sharing a claim** — `namespace` and `pod` stay correct and one of the container names is used. Reported at trace level only.
-- **Several pods sharing one `ResourceClaim`** — the other pods' metrics go unattributed. `rbln_npu_device_shared` reports `1` for those devices, so the partial attribution is visible to whoever is reading a dashboard rather than only to whoever is reading the logs. The exporter also logs a warning naming the affected devices, and an informational record once the sharing ends.
-
----
-
-## Gateway Mode (Multi-Target)
-
-Gateway mode turns a single exporter instance into a stateless collection gateway for many hosts, following the Prometheus [multi-target exporter pattern](https://prometheus.io/docs/guides/multi-target-exporter/) (the same design as `blackbox_exporter` and `snmp_exporter`). It is intended for bare-metal / non-Kubernetes fleets where running one exporter per host is impractical.
-
-|  | `local` (default) | `gateway` |
-| --- | --- | --- |
-| Deployment | One per node (DaemonSet) | One central instance |
-| Collection | Node-local daemon, on a schedule | Remote `rbln-smd` given per scrape, on demand |
-| Target selection | None (own node) | `?target=<host:port>` query parameter |
-| Kubernetes pod labels | Yes | No (hardware metrics only) |
-
-### How It Works
-
-Each Prometheus scrape of `/metrics?target=<host:port>` makes the gateway connect to that host's `rbln-smd` over gRPC, collect the full metric set on the spot, and answer in Prometheus format. The exporter keeps no metric state between requests and holds no target list — targets live entirely in the Prometheus scrape configuration. gRPC connections are cached per target and reconnect automatically.
-
-Every response includes `rbln_up`: `1` when the target daemon answered, `0` when it was unreachable (the HTTP scrape itself still succeeds, so a dead NPU host is reported rather than hidden).
-
-### Running the Gateway
-
-```bash
-$ rbln-metrics-exporter --mode=gateway --port=9200
-```
-
-Verify with a manual scrape (the target is the `rbln-smd` gRPC address as reachable *from the gateway*):
-
-```bash
-$ curl "http://localhost:9200/metrics?target=npu-host-1:50051"
-```
-
-### Prometheus Configuration
-
-Operators list the NPU hosts as targets; relabeling turns each one into a `?target=` parameter and redirects the actual request to the gateway:
-
-```yaml
-scrape_configs:
-  - job_name: rbln-npu-gateway
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-          - npu-host-1:50051   # rbln-smd gRPC address on each NPU host
-          - npu-host-2:50051
-    relabel_configs:
-      # 1. Copy the listed address into the ?target= query parameter.
-      - source_labels: [__address__]
-        target_label: __param_target
-      # 2. Keep it as the instance label so series stay distinguishable per host.
-      - source_labels: [__param_target]
-        target_label: instance
-      # 3. Send the actual HTTP request to the gateway instead of the NPU host.
-      - target_label: __address__
-        replacement: rbln-gateway:9200   # gateway exporter address
-```
-
-With this in place Prometheus scrapes `http://rbln-gateway:9200/metrics?target=npu-host-1:50051` for each host and stores every series with `instance="npu-host-1:50051"`. Rule order matters: the copy rules must run before `__address__` is overwritten.
-
-### Alerting
-
-Two failure signals exist and mean different things:
-
-| Expression | Meaning |
+| I want to… | Guide |
 | --- | --- |
-| `up == 0` | The gateway itself (or the network path to it) is down — affects all targets |
-| `up == 1 and rbln_up == 0` | That specific NPU host's `rbln-smd` is unreachable |
+| Store and query NPU metrics | [Connect Prometheus](https://docs.rbln.ai/latest/software/system_management/kubernetes/tutorials/collect_metrics.html) |
+| Confirm collection and device health | [Check NPU metrics](docs/guides/check-metrics.md) |
+| Understand metric names and labels | [Read the metrics reference](docs/reference/metrics.md) |
+| Collect from remote NPU hosts | [Use gateway mode](https://docs.rbln.ai/latest/software/system_management/kubernetes/metrics_exporter_gateway_mode.html) |
+| Configure daemon TLS or collection permissions | [Connect to the daemon](docs/guides/connect-daemon.md) |
+| Change metric names, intervals, or logging | [Configuration reference](docs/reference/configuration.md) |
 
-### Notes and Limitations
+## Choose a collection mode
 
-- Collection happens inside the scrape request, so slow targets consume scrape time. The gateway honors the `X-Prometheus-Scrape-Timeout-Seconds` header Prometheus sends (10s cap by default) — raise `scrape_timeout` for slow links.
-- Pod/namespace/container labels are not available: the kubelet pod-resources API is node-local and cannot describe remote hosts. Use `local` mode (DaemonSet) on Kubernetes clusters.
-- The `hostname` label is filled with the host part of the target address.
-- The gRPC connection is plaintext unless the SMD TLS options above are configured. Gateway clients use the same TLS and metric-group configuration for every target.
+| Mode | Use it for | Collection | Workload labels |
+| --- | --- | --- | --- |
+| `local` | One exporter per NPU node | On a schedule | Available on Kubernetes |
+| `gateway` | One exporter collecting from remote hosts | On each scrape request | Hardware metrics only |
 
----
+Both modes require access to the RBLN System Management Daemon (`rbln-smd`).
+See the [daemon connection settings](docs/guides/connect-daemon.md) for your deployment.
 
-## Metrics Reference
+## Development
 
-| Name | Description | Unit |
-| --- | --- | --- |
-| `rbln_npu_temperature` | Device temperature | °C |
-| `rbln_npu_power` | Card power draw | W |
-| `rbln_npu_memory_used` | DRAM currently in use | bytes |
-| `rbln_npu_memory_total` | Total DRAM | bytes |
-| `rbln_npu_utilization` | SM utilization | % |
-| `rbln_npu_health` | Readiness: 0 = READY, 1 = another known lifecycle state; absent when unknown | 0/1 |
-| `rbln_npu_collection_success` | 1 when per-device queries succeeded, 0 on a reported per-device query failure; independent of hardware state and metric availability | 0/1 |
-| `rbln_npu_device_status` | Device state machine status; one series per `state`, 1 marks the current state | 0/1 |
-| `rbln_npu_power_state` | DVFS performance state (0 = highest performance); absent when the daemon has no reading | ordinal |
-| `rbln_npu_pcie_link_speed_gts` | Current PCIe link speed | GT/s |
-| `rbln_npu_pcie_link_width` | Current PCIe link width | lanes |
-| `rbln_npu_device_info` | Device identity and static attributes as labels | always 1 |
-| `rbln_npu_device_shared` | 1 if several pods claim the device, so its pod labels name only one of them; Kubernetes mode only | 0/1 |
-| `rbln_up` | 1 if the last metrics collection from `rbln-smd` succeeded, 0 otherwise (local mode: the last scheduled collection cycle; gateway mode: the collection performed for this scrape) | 0/1 |
+See [Contributing](CONTRIBUTING.md) to build and test the exporter.
 
-### Common Label Set
+## Support
 
-| Label | Description |
-| --- | --- |
-| `name` | Character device node (`rbln0`, `rbln1`, …) |
-| `uuid` | Device UUID; VFs may inherit their PF UUID |
-| `card` | Marketing card name (e.g., `RBLN-CA25`) |
-| `deviceID` | PCIe device ID |
-| `hostname` | Host node name |
-| `driver_version` | Kernel driver build |
-| `firmware_version` | Accelerator firmware |
-| `smc_version` | SMC firmware |
+Report bugs and feature requests in [GitHub issues](https://github.com/RBLN-SW/rbln-metrics-exporter/issues).
+Include the exporter and daemon versions, collection mode, and relevant logs.
 
-### Kubernetes-Specific Labels
-
-| Label | Description |
-| --- | --- |
-| `namespace` | Namespace of the pod consuming the device |
-| `pod` | Pod name |
-| `container` | Container name |
-
-### Example Output
-
-Illustrative output for a native VF with available lifecycle state. Labels are
-shortened for readability; the full common label set is listed above.
-
-```text
-# TYPE rbln_npu_memory_total gauge
-rbln_npu_memory_total{hostname="worker-a",name="rbln0-0",pod="consumer"} 150323855360
-# TYPE rbln_npu_memory_used gauge
-rbln_npu_memory_used{hostname="worker-a",name="rbln0-0",pod="consumer"} 545259520
-# TYPE rbln_npu_health gauge
-rbln_npu_health{hostname="worker-a",name="rbln0-0",pod="consumer"} 0
-# TYPE rbln_npu_collection_success gauge
-rbln_npu_collection_success{hostname="worker-a",name="rbln0-0",pod="consumer"} 1
-# TYPE rbln_npu_device_info gauge
-rbln_npu_device_info{hostname="worker-a",name="rbln0-0",pod="consumer",is_vf="true",parent_name="rbln0",num_vfs="0",partition_mode="vf1",compute="true"} 1
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Possible Cause | Action |
-| --- | --- | --- |
-| `rbln_up` is `0` and NPU metrics are absent | Unable to reach RBLN daemon | Verify `RBLN_METRICS_EXPORTER_RBLN_DAEMON_URL`, ensure daemon is listening, check firewall |
-| No Kubernetes labels | Pod-resources socket missing | Confirm `/var/lib/kubelet/pod-resources/kubelet.sock` is mounted and kubelet exposes the API |
-| No Kubernetes labels, DRA-allocated devices only | Kubelet is not reporting DRA allocations | Confirm the cluster is Kubernetes `>= 1.34` (see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra)); run the exporter with `RBLN_METRICS_EXPORTER_LOG_LEVEL=debug` and check the `Synced pod resources` record's device count |
-| Pod labels name only one of several pods sharing a device | Those pods reference one `ResourceClaim` | Expected — a series holds one set of labels. `rbln_npu_device_shared` is `1` for those devices; see [Dynamic Resource Allocation](#dynamic-resource-allocation-dra) |
-| Scrape errors in Prometheus | Authorization/namespace mismatch | Ensure Service or ServiceMonitor selects the exporter pods and Prometheus is allowed to scrape the namespace |
-| Gateway returns HTTP 400 | Missing `?target=` parameter | Check the `relabel_configs` copy rules run before `__address__` is replaced |
-| `rbln_up 0` for one target | That host's `rbln-smd` unreachable from the gateway | Verify the daemon is running on the target and its gRPC port is reachable from the gateway host |
-| Prometheus scrapes the NPU host directly | `__address__` replacement rule missing | Add the final relabel rule pointing `__address__` at the gateway |
-
----
-
-## Licensing
-
-The exporter is provided under the Rebellions Software User License Agreement (see [`LICENSE`](./LICENSE)). Review the agreement before distributing or embedding the binary or container image.
-
----
-
-## Additional Resources
-
-- [RBLN Device Plugin](https://github.com/rebellions-sw/rbln-k8s-device-plugin)
-- [rbln-npu-feature-discovery](https://github.com/rebellions-sw/rbln-npu-feature-discovery)
-- [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator)
-- [Grafana Helm Charts](https://github.com/grafana/helm-charts)
-
-Monitor confidently and keep your Rebellions NPUs healthy!
-
-## RC validation
-
-Release candidates are tested through piper using their published images.
-See [RC validation setup and image inputs](docs/rc-validation.md).
+[License](LICENSE)
