@@ -3,6 +3,7 @@ package system
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrorKind is stable across sysfs, CLI and RPC backends.
@@ -33,7 +34,10 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	s := fmt.Sprintf("%s %s: %s", e.Op, e.Target, e.Kind)
+	s := string(e.Kind)
+	if prefix := strings.TrimSpace(e.Op + " " + e.Target); prefix != "" {
+		s = prefix + ": " + s
+	}
 	if e.Message != "" {
 		s += ": " + e.Message
 	}

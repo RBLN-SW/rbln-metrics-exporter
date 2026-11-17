@@ -13,7 +13,7 @@ const VFIODriver = "vfio-pci"
 const VendorID uint16 = 0x1eff
 const NPUClass uint32 = 0x120000
 
-var pciAddressPattern = regexp.MustCompile(`^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-1][0-9a-fA-F]\.[0-7]$`)
+var pciAddressPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,8}:[0-9a-fA-F]{2}:[0-1][0-9a-fA-F]\.[0-7]$`)
 
 // NormalizePCIAddress validates a full domain:bus:slot.function address.
 func NormalizePCIAddress(address string) (string, error) {
@@ -218,6 +218,10 @@ type BindingRequest struct {
 	// ExpectedDriver, when supplied, prevents a stale plan from replacing
 	// a different binding. The check is not an atomic kernel compare-and-swap.
 	ExpectedDriver *string
+	// AllowAutoprobeAfterUnbind clears the binding override without probing.
+	// Upgrade managers use this before loading a replacement driver. The
+	// default inhibits autoprobe until an explicit Bind/Reprobe operation.
+	AllowAutoprobeAfterUnbind bool
 }
 type Binder interface {
 	Bind(context.Context, BindingRequest) error

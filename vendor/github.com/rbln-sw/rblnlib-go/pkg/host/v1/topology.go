@@ -14,7 +14,7 @@ import (
 	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 )
 
-var pciRootPattern = regexp.MustCompile(`^pci[0-9a-fA-F]{4}:[0-9a-fA-F]{2}$`)
+var pciRootPattern = regexp.MustCompile(`^pci[0-9a-fA-F]{4,8}:[0-9a-fA-F]{2}$`)
 
 func (c *Client) PCIAncestors(ctx context.Context, address string) ([]string, error) {
 	p, err := c.requireDevice(ctx, address)

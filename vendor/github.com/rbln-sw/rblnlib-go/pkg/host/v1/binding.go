@@ -156,8 +156,10 @@ func (c *Client) Unbind(ctx context.Context, request system.BindingRequest) (err
 		return &system.Error{Kind: system.Conflict, Target: address, Message: "disable VFs before unbinding their PF"}
 	}
 	mutated = true
-	if err := c.setOverride(ctx, p, "none"); err != nil {
-		return err
+	if !request.AllowAutoprobeAfterUnbind {
+		if err := c.setOverride(ctx, p, "none"); err != nil {
+			return err
+		}
 	}
 	if driver != "" {
 		if err := c.write(ctx, filepath.Join(p, "driver", "unbind"), address); err != nil {
@@ -170,6 +172,9 @@ func (c *Client) Unbind(ctx context.Context, request system.BindingRequest) (err
 	}
 	if current != "" {
 		return &system.Error{Kind: system.NotReady, Target: address, Message: "driver remains bound"}
+	}
+	if request.AllowAutoprobeAfterUnbind {
+		return c.setOverride(ctx, p, "")
 	}
 	return nil
 }

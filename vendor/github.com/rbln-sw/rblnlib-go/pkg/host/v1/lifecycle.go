@@ -158,14 +158,15 @@ func (c *Client) RootfsMounts(ctx context.Context, root string) ([]Mount, error)
 func (c *Client) UnmountRootfs(ctx context.Context, root string) error {
 	ctx, cancel := context.WithTimeout(ctx, c.opts.CommandTimeout)
 	defer cancel()
-	for {
-		mounts, err := c.RootfsMounts(ctx, root)
-		if err != nil {
+	mounts, err := c.RootfsMounts(ctx, root)
+	if err != nil {
+		return err
+	}
+	for len(mounts) > 0 {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if len(mounts) == 0 {
-			return nil
-		}
+		sort.SliceStable(mounts, func(i, j int) bool { return len(mounts[i].Path) > len(mounts[j].Path) })
 		if err := c.unmount(mounts[0].Path); err != nil {
 			return failure("unmount", mounts[0].Path, err)
 		}
@@ -176,5 +177,7 @@ func (c *Client) UnmountRootfs(ctx context.Context, root string) error {
 		if len(after) >= len(mounts) {
 			return &system.Error{Kind: system.NotReady, Target: root, Message: "unmount made no progress or concurrent remount observed"}
 		}
+		mounts = after
 	}
+	return nil
 }
