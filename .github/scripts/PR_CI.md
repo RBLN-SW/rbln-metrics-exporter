@@ -35,6 +35,28 @@ Coordinate activation with the workflow rollout so existing PRs are not left
 waiting for a check that cannot run. Before retrying an ambiguous trigger failure,
 inspect Piper Runs and the recorded GitHub run ID for an existing build.
 
+## Retrying and synchronizing results
+
+An Actions rerun reuses the latest Piper build recorded for the same workflow
+run ID, PR, repository, bundle, branch and full head SHA. Running builds are
+observed; passed builds complete immediately. Failed or cancelled builds stay
+failed until they are retried successfully in Piper. A new commit or a different
+workflow run never borrows another run's success. An incomplete history lookup
+fails closed instead of creating a duplicate, and cancelling an observer does
+not cancel an independently retried Piper build.
+
+Piper reports the whole bundle using the existing component PR CI context for
+this run. `piper-pr-status.yaml` observes successful status updates and completed
+failed PR workflows. It verifies the current PR and the actual Piper build before
+rerunning only `Piper PR validation` and its dependent Gate. It does not rerun
+image scans or other checks, and never creates a Piper build itself. Automatic
+rechecks are capped at two per workflow run to prevent loops; manual Actions
+reruns still use the same recorded Piper build.
+
+The callback runs default-branch code with Actions write permission. It becomes
+active after this workflow is merged to `main`. Older workflows without the reuse
+protocol are not automatically restarted, since they would create a fresh build.
+
 ## Local validation
 
 ```sh

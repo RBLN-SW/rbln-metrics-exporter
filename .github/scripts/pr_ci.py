@@ -18,6 +18,8 @@ DOC_SUFFIXES = {".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", 
 ROOT_DOC = re.compile(r"(?:README(?:[.-][A-Za-z0-9_-]+)*|CHANGELOG|CONTRIBUTING|CODE_OF_CONDUCT|SECURITY)\.(?:md|rst|txt)\Z", re.I)
 TERMINAL = {"passed", "failed", "broken", "canceled", "cancelled", "skipped", "not_run", "timed_out", "expired"}
 RETRYABLE = {429, 500, 502, 503, 504}
+RUN_LIMIT = 100
+PIPER_STEP = "Validate or reuse Piper build for this PR"
 
 
 class APIError(RuntimeError):
@@ -157,12 +159,13 @@ def trigger_payload(config, pr, env):
         "ignore_pipeline_branch_filters": True,
         "meta_data": {"github_pr": str(pr["number"]), "github_run_id": env.get("GITHUB_RUN_ID", ""),
                       "github_run_attempt": env.get("GITHUB_RUN_ATTEMPT", ""),
+                      "github_pr_ci_version": "2",
                       "github_base_sha": pr["base"]["sha"],
                       "github_base_branch": pr["base"]["ref"],
                       "github_pr_repository": "https://github.com/" + config["repository"]},
-        # No saved pipeline changes or environment overrides. The existing
-        # PR bundle's SAST baseline already defaults to main for API builds.
-        "overrides": {},
+        # Keep the existing context, and report the whole bundle even when a
+        # component previously only reported a member-level status (e.g. NFD).
+        "overrides": {"commit_status": {"enabled": True, "context": config["status_context"]}},
     }
 
 
@@ -189,6 +192,139 @@ def build_identity(build, commit, number=None):
     if build.get("commit") != commit:
         raise ValueError("Piper build does not match the PR head commit")
     return actual
+
+
+def list_runs(piper, config):
+    runs = piper.request("GET", f"/api/bundles/{config['bundle_id']}/runs?limit={RUN_LIMIT}")
+    if not isinstance(runs, list):
+        raise ValueError("Invalid Piper run list")
+    return runs
+
+
+def matches_run(run, config, pr, workflow_run_id):
+    trigger = run.get("trigger") or {}
+    meta = trigger.get("meta_data") or {}
+    return (run.get("bundle_id") == config["bundle_id"] and
+            run.get("ob_pipeline") == config["ob_pipeline"] and
+            run.get("repository") == config["repository"] and
+            trigger.get("commit") == pr["head"]["sha"] and
+            trigger.get("branch") == pr["head"]["ref"] and
+            meta.get("github_run_id") == str(workflow_run_id) and
+            meta.get("github_pr") == str(pr["number"]) and
+            meta.get("github_base_branch") == pr["base"]["ref"] and
+            meta.get("github_pr_repository") == "https://github.com/" + config["repository"])
+
+
+def existing_build(piper, config, pr, env):
+    """Reuse only this workflow's exact PR/bundle/commit, including Piper retries."""
+    run_id = env.get("GITHUB_RUN_ID", "")
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise ValueError("GITHUB_RUN_ID is required to identify the PR validation")
+    runs = list_runs(piper, config)
+    matches = [run for run in runs if matches_run(run, config, pr, run_id)]
+    if not matches:
+        if len(runs) >= RUN_LIMIT and int(env.get("GITHUB_RUN_ATTEMPT", "1")) > 1:
+            raise ValueError("Piper history lookup is bounded; inspect older runs before creating a duplicate build")
+        return None
+    # Never select an older passing run instead of the latest matching run.
+    run = max(matches, key=lambda item: item.get("created_at", ""))
+    number = run.get("ob_build")
+    if not isinstance(number, int) or number < 1:
+        raise ValueError("An existing Piper run has no confirmed build; inspect Piper Runs before retrying")
+    build = piper.request("GET", f"/api/bundles/{config['bundle_id']}/builds/{number}")
+    build_identity(build, pr["head"]["sha"], number)
+    if build.get("branch") != pr["head"]["ref"]:
+        raise ValueError("Piper build branch does not match the PR")
+    return build
+
+
+def start_or_reuse(piper, config, pr, env, root, payload):
+    build = existing_build(piper, config, pr, env)
+    if build is not None:
+        return build, False
+    # One POST only; retrying an ambiguous response can create a second build.
+    try:
+        return piper.request("POST", root + "/trigger", payload), True
+    except (APIError, ValueError) as exc:
+        raise RuntimeError(f"{exc}. Trigger was not retried; inspect Piper Runs before rerunning.") from None
+
+
+def sync_results(piper, github, config, event):
+    """Wake a failed Actions job after its exact Piper build has recovered.
+
+    This runs trusted default-branch code. Events only nominate a run; Piper and
+    GitHub are queried again before rerunning the original PR workflow job.
+    """
+    callback_run = event.get("workflow_run")
+    if callback_run is not None:
+        if callback_run.get("event") != "pull_request" or callback_run.get("conclusion") != "failure":
+            return False
+        sha = callback_run.get("head_sha", "")
+        workflow_run_id = str(callback_run.get("id", ""))
+        number = None
+    else:
+        if event.get("state") != "success" or event.get("context") != config["status_context"]:
+            return False
+        prefix = "https://obedients.k8s.rebellions.in/orgs/main/pipelines/" + config["ob_pipeline"] + "/builds/"
+        match = re.fullmatch(re.escape(prefix) + r"([1-9][0-9]*)(?:[?#].*)?", event.get("target_url") or "")
+        if not match:
+            return False
+        number, sha, workflow_run_id = int(match[1]), event.get("sha", ""), None
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return False
+    candidates = []
+    for run in list_runs(piper, config):
+        trigger = run.get("trigger") or {}
+        meta = trigger.get("meta_data") or {}
+        if (run.get("bundle_id") == config["bundle_id"] and
+                run.get("ob_pipeline") == config["ob_pipeline"] and
+                run.get("repository") == config["repository"] and
+                trigger.get("commit") == sha and meta.get("github_pr_ci_version") == "2" and
+                (number is None or run.get("ob_build") == number) and
+                (workflow_run_id is None or meta.get("github_run_id") == workflow_run_id)):
+            candidates.append(run)
+    if not candidates:
+        return False
+    selected = max(candidates, key=lambda item: item.get("created_at", ""))
+    meta = selected["trigger"]["meta_data"]
+    workflow_run_id, pr_number = meta.get("github_run_id", ""), meta.get("github_pr", "")
+    if not re.fullmatch(r"[1-9][0-9]*", workflow_run_id) or not re.fullmatch(r"[1-9][0-9]*", pr_number):
+        return False
+    repo_root = "/repos/" + config["repository"]
+    pr = github.request("GET", f"{repo_root}/pulls/{pr_number}")
+    if (pr.get("state") != "open" or pr.get("draft") or pr["head"]["sha"] != sha or
+            pr["base"]["ref"] != "main" or
+            pr["head"]["repo"]["full_name"] != config["repository"] or
+            pr["base"]["repo"]["full_name"] != config["repository"]):
+        return False
+    build = existing_build(piper, config, pr, {"GITHUB_RUN_ID": workflow_run_id, "GITHUB_RUN_ATTEMPT": "2"})
+    if build is None or build.get("state") != "passed" or build["number"] != selected.get("ob_build"):
+        return False
+    workflow = github.request("GET", f"{repo_root}/actions/runs/{workflow_run_id}")
+    if (workflow.get("event") != "pull_request" or workflow.get("head_sha") != sha or
+            workflow.get("path") != config["workflow_file"] or workflow.get("status") != "completed" or
+            workflow.get("conclusion") != "failure" or workflow.get("run_attempt", 1) >= 3):
+        return False
+    jobs, page = [], 1
+    while True:
+        result = github.request("GET", f"{repo_root}/actions/runs/{workflow_run_id}/jobs?filter=latest&per_page=100&page={page}")
+        batch = result["jobs"]
+        jobs.extend(batch)
+        if len(jobs) >= result["total_count"]:
+            break
+        if not batch:
+            raise ValueError("Incomplete Actions job list")
+        page += 1
+    failed = [job for job in jobs if job.get("name") == "Piper PR validation" and
+              job.get("status") == "completed" and job.get("conclusion") == "failure" and
+              any(step.get("name") == PIPER_STEP for step in job.get("steps", []))]
+    if len(failed) != 1:
+        return False
+    # Check the PR once more before the write. No PR checkout or build trigger.
+    current_pr(github, config["repository"], pr)
+    github.request("POST", f"{repo_root}/actions/jobs/{failed[0]['id']}/rerun", {})
+    print(f"Requested Actions recheck for PR #{pr_number}, Piper build #{build['number']}", flush=True)
+    return True
 
 
 def wait_result(piper, github, root, repository, pr, number, timeout,
@@ -255,7 +391,7 @@ def gate(needs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["changes", "run", "gate"])
+    parser.add_argument("command", choices=["changes", "run", "gate", "sync"])
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     env = os.environ
@@ -275,8 +411,14 @@ def main():
         event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text())
         if env["GITHUB_REPOSITORY"] != config["repository"]:
             raise ValueError("Workflow repository does not match pr-ci.json")
-        pr = pr_context(event, config["repository"])
         github = Client(env.get("GITHUB_API_URL", "https://api.github.com"), env.get("GITHUB_TOKEN", ""))
+        if args.command == "sync":
+            piper = Client(env.get("PIPER_URL", "https://piper.k8s.rebellions.in"), env.get("PIPER_TOKEN", ""))
+            if args.dry_run:
+                raise ValueError("Use unit tests for the sync callback; it has no dry-run mode")
+            sync_results(piper, github, config, event)
+            return 0
+        pr = pr_context(event, config["repository"])
         required = classify(github, config["repository"], pr)
         if args.command == "changes":
             emit(env, "needs_ci", str(required).lower())
@@ -289,24 +431,22 @@ def main():
         piper = Client(env.get("PIPER_URL", "https://piper.k8s.rebellions.in"), env.get("PIPER_TOKEN", ""))
         root = prepare(piper, config, payload)
         if args.dry_run:
-            print(json.dumps(payload, indent=2))
+            build = existing_build(piper, config, pr, env)
+            print(json.dumps({"request": payload, "reuse_build": build["number"] if build else None}, indent=2))
             return 0
         current_pr(github, config["repository"], pr)
-        # Submission is not success. One POST only, even after an ambiguous timeout.
-        try:
-            build = piper.request("POST", root + "/trigger", payload)
-        except (APIError, ValueError) as exc:
-            raise RuntimeError(f"{exc}. Trigger was not retried; inspect Piper Runs before rerunning.") from None
+        build, created = start_or_reuse(piper, config, pr, env, root, payload)
         number = build_identity(build, pr["head"]["sha"])
         url = build.get("web_url") or build.get("url", "")
         emit(env, "build_number", number)
-        summary(env, f"Piper build #{number}: {url}")
+        summary(env, f"{'Created' if created else 'Reusing'} Piper build #{number}: {url}")
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, interrupted)
         try:
             wait_result(piper, github, root, config["repository"], pr, number, config["timeout_seconds"])
         except (Exception, KeyboardInterrupt):
-            cancel_active(piper, config, root, number, pr["head"]["sha"])
+            if created:
+                cancel_active(piper, config, root, number, pr["head"]["sha"])
             raise
         return 0
     except (RuntimeError, ValueError, KeyError, TypeError, OSError, TimeoutError) as exc:

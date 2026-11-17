@@ -91,7 +91,7 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: .github/scripts
-      - name: Run the existing Piper bundle for this PR head commit
+      - name: Validate or reuse Piper build for this PR
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PIPER_URL: ${{ vars.PIPER_URL || 'https://piper.k8s.rebellions.in' }}
