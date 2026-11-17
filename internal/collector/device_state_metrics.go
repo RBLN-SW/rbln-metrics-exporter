@@ -5,17 +5,17 @@ import (
 	"slices"
 
 	"github.com/prometheus/client_golang/prometheus"
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
-	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
 )
 
-var deviceStates = map[string]pb.DeviceState{
-	"ready":     pb.DeviceState_DEVICE_STATE_READY,
-	"busy":      pb.DeviceState_DEVICE_STATE_BUSY,
-	"init":      pb.DeviceState_DEVICE_STATE_INIT,
-	"fault":     pb.DeviceState_DEVICE_STATE_FAULT,
-	"finish":    pb.DeviceState_DEVICE_STATE_FINISH,
-	"not_found": pb.DeviceState_DEVICE_STATE_UNSPECIFIED,
+var deviceStates = map[string]system.State{
+	"ready":     system.StateReady,
+	"busy":      system.StateBusy,
+	"init":      system.StateInit,
+	"fault":     system.StateFault,
+	"finish":    system.StateFinish,
+	"not_found": system.StateUnknown,
 }
 
 type DeviceStateMetric struct {
@@ -52,8 +52,8 @@ func (d *DeviceStateMetric) UpdateMetrics(ctx context.Context, devices []daemon.
 	podResourceInfo, _ := d.podResourceMapper.SnapshotFor(devices)
 
 	for _, device := range devices {
-		if _, known := pb.DeviceState_name[int32(device.DevState)]; !known {
-			device.DevState = pb.DeviceState_DEVICE_STATE_UNSPECIFIED
+		if !device.HasKnownState() {
+			device.DevState = system.StateUnknown
 		}
 		labels := buildLabels(device, d.nodeName, podResourceInfo, d.includePodLabels)
 		for stateName, stateValue := range deviceStates {

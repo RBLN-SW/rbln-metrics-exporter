@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v0"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -35,7 +35,14 @@ func (s *LegacyServer) GetDeviceList(_ *legacy.Empty, stream grpc.ServerStreamin
 		return err
 	}
 	for _, d := range s.Devices {
-		if err := stream.Send(proto.Clone(d).(*legacy.Device)); err != nil {
+		item := proto.Clone(d).(*legacy.Device)
+		if item.PciBusId == "" {
+			item.PciBusId = fixturePCIAddress(item.Name)
+		}
+		if item.DevId == "" {
+			item.DevId = "2130"
+		}
+		if err := stream.Send(item); err != nil {
 			return err
 		}
 	}

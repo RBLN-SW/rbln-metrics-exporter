@@ -3,8 +3,10 @@ package smdtest
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,8 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
-	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v0"
+	pb "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v1"
 )
 
 type Server struct {
@@ -153,7 +155,7 @@ func (s *Server) SampleMetrics(_ context.Context, r *pb.SampleMetricsRequest) (*
 
 func Device(name string, vf bool) *pb.DeviceInfo {
 	n := uint32(0)
-	return &pb.DeviceInfo{Name: name, Uuid: "shared-uuid", PciBusId: "0000:17:00.0", IsVf: vf, NpuId: &n, State: pb.DeviceState_DEVICE_STATE_READY, Versions: &pb.VersionInfo{DrvVersion: "inline-driver", FwVersion: "inline-firmware"}, Memory: &pb.MemorySpec{TotalBytes: 35 << 30}}
+	return &pb.DeviceInfo{Name: name, Uuid: "shared-uuid", PciBusId: fixturePCIAddress(name), DevId: "2130", IsVf: vf, NpuId: &n, State: pb.DeviceState_DEVICE_STATE_READY, Versions: &pb.VersionInfo{DrvVersion: "inline-driver", FwVersion: "inline-firmware"}, Memory: &pb.MemorySpec{TotalBytes: 35 << 30}}
 }
 
 func Float(name string, id pb.MetricId, value float64) *pb.MetricSample {
@@ -162,4 +164,15 @@ func Float(name string, id pb.MetricId, value float64) *pb.MetricSample {
 
 func Int(name string, id pb.MetricId, value int64) *pb.MetricSample {
 	return &pb.MetricSample{Device: &pb.DeviceRef{Name: name}, MetricId: id, TypedValue: &pb.MetricSample_IntValue{IntValue: value}}
+}
+
+func fixturePCIAddress(name string) string {
+	parts := strings.SplitN(strings.TrimPrefix(name, "rbln"), "-", 2)
+	index, _ := strconv.Atoi(parts[0])
+	function := 0
+	if len(parts) == 2 {
+		function, _ = strconv.Atoi(parts[1])
+		function++
+	}
+	return fmt.Sprintf("0000:%02x:00.%d", 0x17+index, function)
 }

@@ -32,6 +32,16 @@ github.com/prometheus/common/model
 github.com/prometheus/procfs
 github.com/prometheus/procfs/internal/fs
 github.com/prometheus/procfs/internal/util
+# github.com/rbln-sw/rblnlib-go v0.3.0 => ../rblnlib-go
+## explicit; go 1.25.4
+github.com/rbln-sw/rblnlib-go/internal/command
+github.com/rbln-sw/rblnlib-go/internal/hostlock
+github.com/rbln-sw/rblnlib-go/internal/identity
+github.com/rbln-sw/rblnlib-go/internal/proto/smdlegacy
+github.com/rbln-sw/rblnlib-go/internal/proto/smdv1
+github.com/rbln-sw/rblnlib-go/pkg/host/v1
+github.com/rbln-sw/rblnlib-go/pkg/smd/v1
+github.com/rbln-sw/rblnlib-go/pkg/system/v1
 # github.com/spf13/cobra v1.10.1
 ## explicit; go 1.15
 github.com/spf13/cobra
@@ -172,3 +182,4 @@ google.golang.org/protobuf/types/known/timestamppb
 # k8s.io/kubelet v0.34.2
 ## explicit; go 1.24.0
 k8s.io/kubelet/pkg/apis/podresources/v1
+# github.com/rbln-sw/rblnlib-go => ../rblnlib-go

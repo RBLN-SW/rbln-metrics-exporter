@@ -6,11 +6,6 @@ RUN apk add --no-cache build-base git
 
 WORKDIR /src
 
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
-
 COPY . .
 
 ENV CGO_ENABLED=0
@@ -21,7 +16,7 @@ ARG TARGETARCH
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOARCH=${TARGETARCH} go build -buildvcs=false -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
+    GOARCH=${TARGETARCH} go build -mod=vendor -buildvcs=false -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
     -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
 FROM redhat/ubi9-minimal:9.8
