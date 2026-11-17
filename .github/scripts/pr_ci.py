@@ -15,6 +15,7 @@ import urllib.request
 
 CONFIG = Path(__file__).with_name("pr-ci.json")
 DOC_SUFFIXES = {".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
+TEMPLATE_TEXT_SUFFIXES = {".md", ".rst", ".txt"}
 ROOT_DOC = re.compile(r"(?:README(?:[.-][A-Za-z0-9_-]+)*|CHANGELOG|CONTRIBUTING|CODE_OF_CONDUCT|SECURITY)\.(?:md|rst|txt)\Z", re.I)
 TERMINAL = {"passed", "failed", "broken", "canceled", "cancelled", "skipped", "not_run", "timed_out", "expired"}
 RETRYABLE = {429, 500, 502, 503, 504}
@@ -75,8 +76,21 @@ def is_document(path):
     parts = path.split("/")
     if any(part in ("", ".", "..") for part in parts):
         return False
-    return bool(ROOT_DOC.fullmatch(path)) or (
-        parts[0] == "docs" and len(parts) > 1 and PurePosixPath(path).suffix.lower() in DOC_SUFFIXES)
+    suffix = PurePosixPath(path).suffix.lower()
+    if ROOT_DOC.fullmatch(path) or (parts[0] == "docs" and len(parts) > 1 and suffix in DOC_SUFFIXES):
+        return True
+    # Only recognized community-template locations. Other .github files,
+    # including workflows, actions and scripts, still require full validation.
+    lower = [part.lower() for part in parts]
+    template_parts = lower[1:] if lower[0] == ".github" else lower
+    if (len(template_parts) == 1 and suffix in TEMPLATE_TEXT_SUFFIXES and
+            PurePosixPath(template_parts[0]).stem in {"pull_request_template", "issue_template"}):
+        return True
+    if (len(template_parts) > 1 and template_parts[0] == "pull_request_template" and
+            suffix in TEMPLATE_TEXT_SUFFIXES):
+        return True
+    return (len(lower) > 2 and lower[:2] == [".github", "issue_template"] and
+            suffix in TEMPLATE_TEXT_SUFFIXES | {".yml", ".yaml"})
 
 
 def docs_only(files):
@@ -376,16 +390,26 @@ def summary(env, message):
             output.write(message + "\n")
 
 
-def gate(needs):
+def gate(needs, required_jobs=()):
     changes = needs["changes"]
     if changes["result"] != "success":
         raise ValueError("Change detection failed or was cancelled")
     required = changes.get("outputs", {}).get("needs_ci")
+    if required not in {"true", "false"}:
+        raise ValueError("Change detection did not report a valid CI decision")
+    # These jobs are the existing required checks, not advisory image scans.
+    # Aggregation avoids relying on reusable-workflow check names when skipped.
+    for name in required_jobs:
+        allowed = {"success"}
+        if required == "false" and name != "pr-title-validation":
+            allowed.add("skipped")
+        if needs.get(name, {}).get("result") not in allowed:
+            raise ValueError(f"Required PR check {name} did not pass")
     result = needs["piper"]["result"]
     if required == "false" and result == "skipped":
-        return "Documentation-only PR: no Buildkite build was created."
+        return "Documentation/template-only PR: no Buildkite build was created."
     if required == "true" and result == "success":
-        return "The PR head commit passed its Piper CI bundle."
+        return "The PR head commit passed its required checks and Piper CI bundle."
     raise ValueError("Required Piper validation did not pass")
 
 
@@ -397,7 +421,8 @@ def main():
     env = os.environ
     try:
         if args.command == "gate":
-            summary(env, gate(json.loads(env["NEEDS_JSON"])))
+            config = json.loads(CONFIG.read_text())
+            summary(env, gate(json.loads(env["NEEDS_JSON"]), config["gate_jobs"]))
             return 0
         if args.command == "changes":
             if env.get("GITHUB_EVENT_NAME") != "pull_request":
@@ -423,7 +448,7 @@ def main():
         if args.command == "changes":
             emit(env, "needs_ci", str(required).lower())
             summary(env, "Code/build/configuration validation is required." if required else
-                    "Documentation-only PR: build, image scan and hardware validation are not required.")
+                    "Documentation/template-only PR: build, image scan and hardware validation are not required.")
             return 0
         if not required:
             raise ValueError("Documentation-only PR must not enter the Piper job")

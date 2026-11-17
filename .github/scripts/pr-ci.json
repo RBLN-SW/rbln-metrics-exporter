@@ -4,5 +4,10 @@
   "ob_pipeline": "pr-metrics-exporter",
   "timeout_seconds": 10200,
   "status_context": "[Metrics Exporter] PR CI",
-  "workflow_file": ".github/workflows/trigger-pr.yaml"
+  "workflow_file": ".github/workflows/trigger-pr.yaml",
+  "gate_jobs": [
+    "code-check",
+    "go-build",
+    "pr-title-validation"
+  ]
 }

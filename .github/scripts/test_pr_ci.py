@@ -50,6 +50,36 @@ class ClassificationTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(pr_ci.docs_only([file("README.md"), file(path)]))
 
+    def test_pr_and_issue_templates_skip_expensive_ci(self):
+        paths = (
+            "pull_request_template.md", "PULL_REQUEST_TEMPLATE.txt", "ISSUE_TEMPLATE.md",
+            ".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.MD",
+            ".github/ISSUE_TEMPLATE.md", "PULL_REQUEST_TEMPLATE/bugfix.md",
+            ".github/PULL_REQUEST_TEMPLATE/feature.md", "docs/PULL_REQUEST_TEMPLATE/fix.md",
+            ".github/ISSUE_TEMPLATE/bug_report.md", ".github/ISSUE_TEMPLATE/bug_report.yml",
+            ".github/ISSUE_TEMPLATE/feature.yaml", ".github/ISSUE_TEMPLATE/config.yml",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertTrue(pr_ci.docs_only([file(path)]))
+        self.assertTrue(pr_ci.docs_only([file(path) for path in paths]))
+
+    def test_templates_do_not_hide_code_or_ci_changes(self):
+        for path in (".github/workflows/test.yml", ".github/actions/build/action.yml",
+                     ".github/scripts/pr_ci.py", ".github/dependabot.yml",
+                     ".github/ISSUE_TEMPLATE/helper.py", ".github/PULL_REQUEST_TEMPLATE/build.sh",
+                     ".github/PULL_REQUEST_TEMPLATE/workflow.yml", ".github/ISSUE_TEMPLATE.yml",
+                     "testdata/PULL_REQUEST_TEMPLATE.md", "docs/examples/example.yaml",
+                     "cmd/plugin/main.go", "go.mod", "deployments/chart/values.yaml"):
+            with self.subTest(path=path):
+                self.assertFalse(pr_ci.docs_only([file(".github/pull_request_template.md"), file(path)]))
+
+    def test_rename_into_template_folder_does_not_hide_code_removal(self):
+        self.assertFalse(pr_ci.docs_only([file(".github/ISSUE_TEMPLATE/bug.yml", "renamed",
+                                              previous_filename=".github/workflows/ci.yml")]))
+        self.assertTrue(pr_ci.docs_only([file(".github/PULL_REQUEST_TEMPLATE/fix.md", "renamed",
+                                             previous_filename=".github/pull_request_template.md")]))
+
     def test_renames_check_old_and_new_paths(self):
         self.assertFalse(pr_ci.docs_only([file("docs/old.md", "renamed", previous_filename="main.go")]))
         self.assertFalse(pr_ci.docs_only([file("docs/old.md", "renamed")]))
@@ -196,6 +226,33 @@ class GateTests(unittest.TestCase):
     def test_unexpected_docs_build_does_not_hide_a_routing_bug(self):
         with self.assertRaises(ValueError):
             pr_ci.gate(self.needs("false", "success"))
+
+    def test_docs_allow_skipped_code_checks_but_require_title_validation(self):
+        needs = self.needs("false", "skipped")
+        needs.update({"code-check": {"result": "skipped"}, "go-tests": {"result": "skipped"},
+                      "pr-title-validation": {"result": "success"}})
+        jobs = ["code-check", "go-tests", "pr-title-validation"]
+        self.assertIn("no Buildkite", pr_ci.gate(needs, jobs))
+        for result in ("skipped", "failure", "cancelled"):
+            needs["pr-title-validation"]["result"] = result
+            with self.subTest(result=result), self.assertRaisesRegex(ValueError, "pr-title-validation"):
+                pr_ci.gate(needs, jobs)
+
+    def test_successful_piper_does_not_hide_a_required_code_check_failure(self):
+        for result in ("failure", "cancelled", "skipped", ""):
+            needs = self.needs("true", "success")
+            needs["go-tests"] = {"result": result}
+            with self.subTest(result=result), self.assertRaisesRegex(ValueError, "go-tests"):
+                pr_ci.gate(needs, ["go-tests"])
+
+    def test_missing_workflow_dependency_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "go-build"):
+            pr_ci.gate(self.needs("true", "success"), ["go-build"])
+
+    def test_all_required_code_checks_must_pass(self):
+        needs = self.needs("true", "success")
+        needs.update({"code-check": {"result": "success"}, "go-tests": {"result": "success"}})
+        self.assertIn("passed", pr_ci.gate(needs, ["code-check", "go-tests"]))
 
 
 class ClientTests(unittest.TestCase):

@@ -100,7 +100,7 @@ jobs:
 
   pr-ci-gate:
     name: PR CI Gate
-    needs: [changes, piper]
+    needs: [changes, piper, code-check, go-build, pr-title-validation]
     if: always() && github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -3,11 +3,28 @@
 For pull requests targeting `main`, `PR CI Gate` replaces the required external
 Piper PR CI status. GitHub Actions always classifies the complete PR diff.
 
-Only known root documentation files (README, CHANGELOG, CONTRIBUTING,
-CODE_OF_CONDUCT and SECURITY) and prose/image files under `docs/` can skip CI.
-Executable examples, manifests, dependency files, build scripts and workflow
-changes still run the existing checks. Renames must have documentation paths on
-both sides. Incomplete file lists and API failures cannot produce a docs-only pass.
+Only explicitly recognized documentation and community templates can skip the
+expensive checks:
+
+- Root README, CHANGELOG, CONTRIBUTING, CODE_OF_CONDUCT and SECURITY files.
+- Prose and document images under `docs/`.
+- PR/Issue template text files in the root or `.github/`, and PR template text
+  files under `PULL_REQUEST_TEMPLATE/` in the root, `docs/` or `.github/`.
+- Markdown/text and YAML issue forms or chooser configuration under
+  `.github/ISSUE_TEMPLATE/`.
+
+Source, tests, dependencies, Dockerfiles, Makefiles, Helm/CRDs/deployment YAML,
+executable examples, `.github/workflows`, Actions, CI scripts and `.buildkite`
+still run CI. Unknown paths run CI too. A mixed documentation/code PR runs CI.
+Renames must match the exclusion policy on both sides. Incomplete file lists
+and API failures cannot produce a documentation-only pass.
+
+Change detection and PR title validation remain lightweight checks. The Gate
+aggregates the original required jobs listed in `pr-ci.json` (`gate_jobs`) and
+Piper. For code changes every required job must succeed; for documentation and
+templates the expensive jobs may be skipped, but PR title validation must pass.
+Missing, failed or cancelled required results never pass the Gate. Image scans
+that were advisory remain outside the Gate.
 
 For code changes, the gate calls the existing Piper bundle configured in
 `pr-ci.json`, using the full PR head SHA, and waits for that exact build to pass.
@@ -22,10 +39,15 @@ The Piper job uses the existing internal GitHub runner to reach Piper.
 ## Activation
 
 1. Validate this workflow and script on a main-targeting PR.
-2. In the `protect-main` ruleset, replace the external `[component] PR CI`
-   required context with `PR CI Gate`, provided by GitHub Actions (app 15368).
-   Preserve all other required checks and rules. Existing expensive GitHub jobs
-   are skipped by job conditions for docs-only PRs; the workflow itself runs.
+2. After the aggregate Gate is merged to `main`, update `protect-main` to
+   require `PR CI Gate`, provided by GitHub Actions (app 15368). Replace both the
+   external `[component] PR CI` context and the conditional lint/build/test
+   contexts covered by `gate_jobs`. Keep PR title validation and any unrelated
+   checks/rules. Reusable-workflow check names can differ when their caller is
+   skipped; retaining those conditional contexts can leave documentation PRs
+   waiting for checks that are not produced. The Gate enforces the same required
+   code checks under one stable name. Do not remove their individual requirements
+   before this aggregate Gate is deployed.
 3. Disable `build_pull_requests` on the linked Obedients PR pipeline. Actions is
    then the only automatic main PR dispatcher; leaving both enabled creates
    duplicate builds. Keep the existing Piper bundle, YAML, schedules and manual
