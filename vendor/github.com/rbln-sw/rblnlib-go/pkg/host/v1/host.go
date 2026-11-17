@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rbln-sw/rblnlib-go/internal/identity"
+	"golang.org/x/sys/unix"
 
 	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 )
@@ -159,9 +160,35 @@ func failure(op, target string, err error) error {
 	return &system.Error{Kind: kind, Op: op, Target: target, Cause: err}
 }
 
-func readText(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	return strings.TrimSpace(string(b)), failure("read", path, err)
+// readText must not hand a transient sysfs EAGAIN to Go's netpoller. After
+// PCI rebind some attributes become readable without sending a poll event,
+// so os.ReadFile can wait forever on the original descriptor. Direct reads
+// return NotReady to the caller's reconciliation policy.
+func readText(path string) (text string, err error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return "", failure("read", path, err)
+	}
+	defer func() { err = errors.Join(err, failure("close", path, unix.Close(fd))) }()
+	const maxAttributeBytes = 1 << 20
+	data := make([]byte, 0, 4096)
+	var chunk [4096]byte
+	for {
+		n, readErr := unix.Read(fd, chunk[:])
+		if errors.Is(readErr, unix.EINTR) {
+			continue
+		}
+		if readErr != nil {
+			return "", failure("read", path, readErr)
+		}
+		if n == 0 {
+			return strings.TrimSpace(string(data)), nil
+		}
+		if len(data)+n > maxAttributeBytes {
+			return "", system.FieldError(path, "attribute size", "exceeds 1 MiB")
+		}
+		data = append(data, chunk[:n]...)
+	}
 }
 
 func readUint(path string, bits int) (uint64, error) {
