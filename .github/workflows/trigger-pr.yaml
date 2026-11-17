@@ -99,7 +99,7 @@ jobs:
         run: python3 .github/scripts/pr_ci.py run
 
   pr-ci-gate:
-    name: PR CI Gate
+    name: PR CI Gate (required checks)
     needs: [changes, piper, code-check, go-build, pr-title-validation]
     if: always() && github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest

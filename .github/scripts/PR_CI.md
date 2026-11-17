@@ -1,6 +1,6 @@
 # PR CI gate
 
-For pull requests targeting `main`, `PR CI Gate` replaces the required external
+For pull requests targeting `main`, `PR CI Gate (required checks)` replaces the required external
 Piper PR CI status. GitHub Actions always classifies the complete PR diff.
 
 Only explicitly recognized documentation and community templates can skip the
@@ -24,7 +24,8 @@ aggregates the original required jobs listed in `pr-ci.json` (`gate_jobs`) and
 Piper. For code changes every required job must succeed; for documentation and
 templates the expensive jobs may be skipped, but PR title validation must pass.
 Missing, failed or cancelled required results never pass the Gate. Image scans
-that were advisory remain outside the Gate.
+that were advisory remain outside the Gate. The aggregate check has a new name so
+older Piper-only `PR CI Gate` successes cannot satisfy the expanded requirement.
 
 For code changes, the gate calls the existing Piper bundle configured in
 `pr-ci.json`, using the full PR head SHA, and waits for that exact build to pass.
@@ -40,7 +41,7 @@ The Piper job uses the existing internal GitHub runner to reach Piper.
 
 1. Validate this workflow and script on a main-targeting PR.
 2. After the aggregate Gate is merged to `main`, update `protect-main` to
-   require `PR CI Gate`, provided by GitHub Actions (app 15368). Replace both the
+   require `PR CI Gate (required checks)`, provided by GitHub Actions (app 15368). Replace both the
    external `[component] PR CI` context and the conditional lint/build/test
    contexts covered by `gate_jobs`. Keep PR title validation and any unrelated
    checks/rules. Reusable-workflow check names can differ when their caller is
