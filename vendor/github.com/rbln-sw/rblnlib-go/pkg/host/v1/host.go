@@ -215,6 +215,13 @@ func readHex(path string, bits int) (uint64, error) {
 	return n, nil
 }
 
+func deviceError(address string, err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		err = errors.Join(system.ErrDeviceNotFound, err)
+	}
+	return failure("device", address, err)
+}
+
 func (c *Client) requireDevice(ctx context.Context, address string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -224,7 +231,7 @@ func (c *Client) requireDevice(ctx context.Context, address string) (string, err
 		return "", err
 	}
 	if _, err := os.Stat(p); err != nil {
-		return "", failure("device", address, err)
+		return "", deviceError(address, err)
 	}
 	vendor, err := readHex(filepath.Join(p, "vendor"), 16)
 	if err != nil {
@@ -371,7 +378,7 @@ func (c *Client) CurrentDriver(ctx context.Context, address string) (string, err
 	target, err := os.Readlink(link)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, e := os.Stat(p); e != nil {
-			return "", failure("device", address, e)
+			return "", deviceError(address, e)
 		}
 		return "", nil
 	}

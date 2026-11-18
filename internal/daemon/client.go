@@ -105,7 +105,7 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 		for _, issue := range append(append([]system.Issue(nil), raw.Issues...), reading.Issues...) {
 			// Unsupported/malformed individual values are absent readings. Collection
 			// status tracks actual query/availability failures, independently of health.
-			if errors.Is(issue.Err, system.ErrUnsupported) || errors.Is(issue.Err, system.ErrInvalidData) {
+			if errors.Is(issue.Err, system.ErrUnsupported) || errors.Is(issue.Err, system.ErrInvalidData) || errors.Is(issue.Err, system.ErrNotReported) {
 				continue
 			}
 			d.CollectionSucceeded = false

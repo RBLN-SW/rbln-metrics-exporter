@@ -21,6 +21,7 @@ const (
 	Conflict         ErrorKind = "conflict"
 	Indeterminate    ErrorKind = "indeterminate"
 	Internal         ErrorKind = "internal"
+	NotReported      ErrorKind = "not_reported" // an in-scope metric omitted by a successful sample response
 )
 
 // Error retains the backend cause for diagnosis. Code/Errno/Category are
@@ -54,6 +55,10 @@ func (e *Error) Is(target error) bool {
 }
 
 var (
+	ErrNotReported = &Error{Kind: NotReported}
+	// ErrDeviceNotFound identifies an absent host PCI function specifically.
+	// The error also matches ErrNotFound and retains the OS cause.
+	ErrDeviceNotFound   = errors.New("PCI function not found")
 	ErrUnsupported      = &Error{Kind: Unsupported}
 	ErrNotFound         = &Error{Kind: NotFound}
 	ErrNotReady         = &Error{Kind: NotReady}

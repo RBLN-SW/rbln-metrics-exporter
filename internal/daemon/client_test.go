@@ -460,3 +460,12 @@ func TestTLSRejectsUntrustedDaemon(t *testing.T) {
 		t.Fatal("untrusted connection reached the daemon")
 	}
 }
+
+func TestSuccessfulEmptySampleOmitsValues(t *testing.T) {
+	s := &smdtest.Server{}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	d := collect(t, startFake(t, s))[0]
+	if !d.CollectionSucceeded || d.Power != nil || d.Temperature != nil || d.Utilization != nil || d.MemoryUsedBytes != nil || d.PState != nil {
+		t.Fatalf("empty successful response fabricated readings or failed collection: %+v", d)
+	}
+}

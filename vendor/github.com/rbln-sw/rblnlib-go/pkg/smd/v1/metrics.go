@@ -253,8 +253,7 @@ func (c *Client) collectTelemetry(ctx context.Context, groupID string, createGro
 			continue
 		}
 		d := out.Devices[i].Device
-		if (d.FunctionKind == system.VirtualFunction && (m == system.TemperatureCelsius || m == system.PowerWatts)) ||
-			((d.Compute == nil || !*d.Compute) && (m == system.MemoryUsedBytes || m == system.UtilizationPercent)) {
+		if !metricApplies(d, m) {
 			out.Devices[i].Issues = append(out.Devices[i].Issues, system.Issue{Target: name, Field: string(m), Err: &system.Error{Kind: system.Unsupported, Message: "metric is not scoped to this function"}})
 			continue
 		}
@@ -272,7 +271,34 @@ func (c *Client) collectTelemetry(ctx context.Context, groupID string, createGro
 		}
 		out.Devices[i].Values[m] = value
 	}
+	for i := range out.Devices {
+		r := &out.Devices[i]
+		if blocked[r.Device.Name] {
+			continue
+		}
+		for _, id := range telemetryIDs {
+			m := metric(id)
+			if metricApplies(r.Device, m) && !seenSamples[r.Device.Name][m] {
+				r.Issues = append(r.Issues, system.Issue{Target: r.Device.Name, Field: string(m), Err: system.ErrNotReported})
+			}
+		}
+	}
 	return out, nil
+}
+
+// The dedicated group requests board telemetry on PFs, utilization and memory
+// on compute functions, and the performance state on both PFs and VFs.
+func metricApplies(d system.Device, m system.Metric) bool {
+	switch m {
+	case system.TemperatureCelsius, system.PowerWatts:
+		return d.FunctionKind == system.PhysicalFunction
+	case system.UtilizationPercent, system.MemoryUsedBytes:
+		return d.Compute != nil && *d.Compute
+	case system.PerformanceState:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizedSample(s *pb.MetricSample) (system.Metric, system.MetricValue, error) {

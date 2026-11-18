@@ -170,7 +170,9 @@ const (
 )
 
 // MetricValue uses exactly one representation. Byte counts remain integers
-// above 2^53. An unavailable reading is absent and described by an Issue.
+// above 2^53. Absent in-scope v1 samples carry ErrNotReported on the metric
+// field. An unreachable device carries a device-level issue instead. Metrics
+// outside the scope of a function can be absent without an issue.
 type MetricValue struct {
 	Float *float64
 	Uint  *uint64

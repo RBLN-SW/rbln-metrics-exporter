@@ -212,6 +212,14 @@ func (c *Client) telemetryLegacy(ctx context.Context, inv system.Snapshot) (syst
 			if n := info.GetPState(); n >= 0 {
 				reading.Values[system.PerformanceState] = system.MetricValue{Uint: system.Pointer(uint64(n))}
 			}
+			// Successful v0 messages use scalar fields: zero is a reading.
+			// An absent in-scope value here has already failed validation.
+			for _, id := range telemetryIDs {
+				m := metric(id)
+				if _, ok := reading.Values[m]; !ok && metricApplies(d, m) {
+					reading.Issues = append(reading.Issues, system.Issue{Target: d.Name, Field: string(m), Err: system.FieldError(d.Name, string(m), "invalid legacy reading")})
+				}
+			}
 		}
 		v, err := c.legacy.GetVersion(ctx, &legacy.Device{Name: d.Name})
 		if err == nil && v.GetErrStatus() == legacy.Status_SUCCEED {

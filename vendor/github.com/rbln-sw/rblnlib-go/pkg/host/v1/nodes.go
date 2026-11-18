@@ -46,51 +46,29 @@ func (c *Client) function(ctx context.Context, address string) (functionInfo, er
 			if class == "rebellions" && !identity.NativeFunction(entry.Name()) {
 				continue
 			}
-			p := filepath.Join(root, entry.Name())
-			var owner string
-			_, e := os.Lstat(filepath.Join(p, "device"))
-			if e == nil {
-				owner, e = pciLink(filepath.Join(p, "device"))
-				if e != nil {
-					return functionInfo{}, e
-				}
-			} else {
-				// Legacy layouts may publish pci_addr without a device link.
-				if !errors.Is(e, os.ErrNotExist) {
-					return functionInfo{}, failure("function device link", p, e)
-				}
-				raw, readErr := readText(filepath.Join(p, "pci_addr"))
-				if errors.Is(readErr, system.ErrNotFound) {
-					continue
-				}
-				if readErr != nil {
-					return functionInfo{}, readErr
-				}
-				owner, e = system.NormalizePCIAddress(raw)
-				if e != nil {
-					return functionInfo{}, system.FieldError(p, "pci_addr", raw)
-				}
-			}
-			if owner != a {
+			if !entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
 				continue
 			}
-			if raw, e := readText(filepath.Join(p, "pci_addr")); e == nil && !strings.EqualFold(raw, a) {
-				return functionInfo{}, system.FieldError(p, "pci_addr", "disagrees with device link")
-			} else if e != nil && !errors.Is(e, system.ErrNotFound) {
-				return functionInfo{}, e
+			p := filepath.Join(root, entry.Name())
+			owns, err := ownsPCIAddress(p, a)
+			if err != nil {
+				return functionInfo{}, err
+			}
+			if !owns {
+				continue
 			}
 			name := entry.Name()
 			node := entry.Name()
 			if class == "accel" {
-				name, e = readText(filepath.Join(p, "name"))
+				name, err = readText(filepath.Join(p, "name"))
 				// KMD 3.4 exposes generic accel minors alongside the legacy
 				// class, without the RBLN name/attributes added by v4. Their
 				// presence alone is not evidence of the v4 device interface.
-				if errors.Is(e, system.ErrNotFound) {
+				if errors.Is(err, system.ErrNotFound) {
 					continue
 				}
-				if e != nil {
-					return functionInfo{}, e
+				if err != nil {
+					return functionInfo{}, err
 				}
 				node = filepath.Join("accel", entry.Name())
 			}
@@ -150,6 +128,46 @@ func (c *Client) function(ctx context.Context, address string) (functionInfo, er
 		return *found, nil
 	}
 	return functionInfo{}, &system.Error{Kind: system.NotReady, Target: a, Message: "native function not present in sysfs"}
+}
+
+// Both class directories are shared with other devices. Inspect ownership
+// before following a link so a platform device or disappearing peer cannot
+// invalidate the requested function. Reject contradictory claims on the target.
+func ownsPCIAddress(entry, address string) (bool, error) {
+	link := filepath.Join(entry, "device")
+	target, linkErr := os.Readlink(link)
+	if linkErr != nil && !errors.Is(linkErr, os.ErrNotExist) {
+		return false, failure("function device link", link, linkErr)
+	}
+	hasLink := linkErr == nil
+	owns := hasLink && strings.EqualFold(filepath.Base(target), address)
+	raw, err := readText(filepath.Join(entry, "pci_addr"))
+	if hasLink && !owns {
+		if err == nil && strings.EqualFold(raw, address) {
+			return false, system.FieldError(entry, "pci_addr", "disagrees with device link")
+		}
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, system.ErrNotFound) {
+		return false, err
+	}
+	if !hasLink {
+		if err != nil {
+			return false, nil
+		}
+		owner, err := system.NormalizePCIAddress(raw)
+		if err != nil {
+			return false, system.FieldError(entry, "pci_addr", raw)
+		}
+		return owner == address, nil
+	}
+	if _, err := os.Stat(link); err != nil {
+		return false, failure("function device link", link, err)
+	}
+	if err == nil && !strings.EqualFold(raw, address) {
+		return false, system.FieldError(entry, "pci_addr", "disagrees with device link")
+	}
+	return true, nil
 }
 
 // NativeName resolves the currently attached driver's command name. It is not

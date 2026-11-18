@@ -28,7 +28,7 @@ func (c *Client) Bind(ctx context.Context, request system.BindingRequest) (err e
 	defer cancel()
 	release, err := hostlock.Acquire(ctx, c.opts.LockPath)
 	if err != nil {
-		return failure("host lock", request.PCIAddress, err)
+		return err
 	}
 	defer func() { err = errors.Join(err, release()) }()
 	p, err := c.requireDevice(ctx, request.PCIAddress)
