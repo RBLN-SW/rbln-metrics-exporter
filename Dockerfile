@@ -19,16 +19,22 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     GOARCH=${TARGETARCH} go build -mod=vendor -buildvcs=false -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
     -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
-FROM redhat/ubi9-minimal:9.8
-ARG VERSION
+# Install runtime RPMs in a UBI Micro filesystem, keeping the package
+# manager and its networking dependencies in the build stage.
+FROM redhat/ubi9-micro:9.9 AS runtime-base
+FROM redhat/ubi9:9.9 AS runtime-rootfs
+COPY --from=runtime-base / /mnt/rootfs/
+RUN dnf -y --installroot=/mnt/rootfs --releasever=9 \
+        --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        install ca-certificates && \
+    dnf --installroot=/mnt/rootfs clean all
+RUN groupadd --prefix /mnt/rootfs -r -g 999 rbln && \
+    useradd --prefix /mnt/rootfs -r -u 999 -g 999 -M -d /home/rbln -s /sbin/nologin -c "RBLN Metrics Exporter user" rbln && \
+    install -d -o 999 -g 999 /mnt/rootfs/home/rbln
 
-RUN microdnf upgrade -y && \
-    microdnf install -y shadow-utils && \
-    groupadd -r rbln && \
-    useradd -r -g rbln -d /home/rbln -s /sbin/nologin -c "RBLN Metrics Exporter user" rbln && \
-    mkdir -p /home/rbln && \
-    chown rbln:rbln /home/rbln && \
-    microdnf clean all
+FROM runtime-base
+COPY --from=runtime-rootfs /mnt/rootfs/ /
+ARG VERSION
 
 COPY LICENSE /licenses/LICENSE.txt
 
