@@ -19,21 +19,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     GOARCH=${TARGETARCH} go build -mod=vendor -buildvcs=false -ldflags "-X github.com/rebellions-sw/rbln-metrics-exporter/internal/cmd.Version=${VERSION:-dev}" \
     -o /usr/local/bin/rbln-metrics-exporter ./cmd/rbln-metrics-exporter
 
-# Install runtime RPMs in a UBI Micro filesystem, keeping the package
-# manager and its networking dependencies in the build stage.
 FROM redhat/ubi9-micro:9.9 AS runtime-base
-FROM redhat/ubi9:9.9 AS runtime-rootfs
-COPY --from=runtime-base / /mnt/rootfs/
-RUN dnf -y --installroot=/mnt/rootfs --releasever=9 \
-        --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-        install ca-certificates && \
-    dnf --installroot=/mnt/rootfs clean all
-RUN groupadd --prefix /mnt/rootfs -r -g 999 rbln && \
-    useradd --prefix /mnt/rootfs -r -u 999 -g 999 -M -d /home/rbln -s /sbin/nologin -c "RBLN Metrics Exporter user" rbln && \
-    install -d -o 999 -g 999 /mnt/rootfs/home/rbln
+# Only the trust bundle and service account files cross into the target image.
+FROM --platform=$BUILDPLATFORM redhat/ubi9:9.9 AS runtime-config
+COPY --from=runtime-base /etc/passwd /etc/group /etc/shadow /etc/gshadow /runtime/etc/
+RUN groupadd --prefix /runtime -r -g 999 rbln && \
+    useradd --prefix /runtime -r -u 999 -g 999 -M -d /home/rbln -s /sbin/nologin -c "RBLN Metrics Exporter user" rbln && \
+    install -d -o 999 -g 999 /runtime/home/rbln && \
+    install -D -m 0644 /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /runtime/etc/pki/tls/certs/ca-bundle.crt
 
 FROM runtime-base
-COPY --from=runtime-rootfs /mnt/rootfs/ /
+COPY --from=runtime-config /runtime/ /
 ARG VERSION
 
 COPY LICENSE /licenses/LICENSE.txt
