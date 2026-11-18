@@ -1,0 +1,32 @@
+# Rebellions (vendor 1eff) pci.ids block bundled into the image.
+# Upstream pci-ids.ucw.cz ships a 1eff block (as of Aug 2026), but we keep
+# bundling this file so image builds stay deterministic and offline, and
+# because this fallback only serves drivers that predate the card_name
+# sysfs attribute — a fixed set of devices that will not grow (newer SKUs
+# always resolve via card_name).
+#
+# Divergences from the upstream 1eff block:
+# - 1020/1021 use RBLN-CA02 (upstream says RBLN-CA2) to preserve the
+#   npu.product label values this DaemonSet has always emitted; align
+#   once the driver's card_name is confirmed on real hardware.
+# - 1150 (RBLN-CA15) added; missing upstream.
+1eff  Rebellions Inc.
+	1020  RBLN-CA02 (PF)
+	1021  RBLN-CA02 (VF)
+	1110  RBLN-CA11 (PF)
+	1111  RBLN-CA11 (VF)
+	1120  RBLN-CA12 (PF)
+	1121  RBLN-CA12 (VF)
+	1150  RBLN-CA15 (PF)
+	1210  RBLN-CA21 (PF)
+	1211  RBLN-CA21 (VF)
+	1220  RBLN-CA22 (PF)
+	1221  RBLN-CA22 (VF)
+	1250  RBLN-CA25 (PF)
+	1251  RBLN-CA25 (VF)
+	2030  RBLN-CR03 (PF)
+	2031  RBLN-CR03 (VF)
+	2130  RBLN-CR13 (PF)
+	2131  RBLN-CR13 (VF)
+	2230  RBLN-CR23 (PF)
+	2231  RBLN-CR23 (VF)

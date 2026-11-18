@@ -1,6 +1,6 @@
 package daemon
 
-import pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
+import system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 
 type TopologyInfo struct {
 	NUMANode  int32
@@ -31,7 +31,7 @@ type DeviceInfo struct {
 	DriverVersion       string
 	FirmwareVersion     string
 	SMCVersion          string
-	DevState            pb.DeviceState
+	DevState            system.State
 	CollectionSucceeded bool
 	PState              *int64
 	PCIeLinkSpeed       *float64
@@ -41,8 +41,8 @@ type DeviceInfo struct {
 
 func (d DeviceInfo) HasKnownState() bool {
 	switch d.DevState {
-	case pb.DeviceState_DEVICE_STATE_FAULT, pb.DeviceState_DEVICE_STATE_INIT, pb.DeviceState_DEVICE_STATE_READY,
-		pb.DeviceState_DEVICE_STATE_BUSY, pb.DeviceState_DEVICE_STATE_FINISH:
+	case system.StateFault, system.StateInit, system.StateReady,
+		system.StateBusy, system.StateFinish:
 		return true
 	default:
 		return false
@@ -55,7 +55,7 @@ func (d DeviceInfo) Health() (float64, bool) {
 	if !d.HasKnownState() {
 		return 0, false
 	}
-	if d.DevState == pb.DeviceState_DEVICE_STATE_READY {
+	if d.DevState == system.StateReady {
 		return 0, true
 	}
 	return 1, true

@@ -19,7 +19,7 @@ import (
 
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/logging"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest"
-	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
+	pb "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v1"
 )
 
 func startFake(t *testing.T, s *smdtest.Server, options ...Options) *Client {
@@ -248,26 +248,26 @@ func TestPartialTelemetryDoesNotClearOtherDevices(t *testing.T) {
 }
 
 func TestInvalidSamplesAreAbsent(t *testing.T) {
-	d := DeviceInfo{Compute: true}
-	for _, s := range []*pb.MetricSample{
-		smdtest.Float("", pb.MetricId_METRIC_ID_UTILIZATION_PERCENT_MILLI, math.NaN()),
-		smdtest.Float("", pb.MetricId_METRIC_ID_POWER_MICRO_WATT, -1),
-		smdtest.Int("", pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, -1),
-		smdtest.Int("", pb.MetricId_METRIC_ID_PSTATE, -1),
-		{MetricId: pb.MetricId_METRIC_ID_TEMPERATURE_MILLI_CELSIUS},
-	} {
-		applySample(&d, s)
-	}
+	server := &smdtest.Server{}
+	server.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, []*pb.MetricSample{
+		smdtest.Float("rbln0", pb.MetricId_METRIC_ID_UTILIZATION_PERCENT_MILLI, math.NaN()),
+		smdtest.Float("rbln0", pb.MetricId_METRIC_ID_POWER_MICRO_WATT, -1),
+		smdtest.Int("rbln0", pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, -1),
+		smdtest.Int("rbln0", pb.MetricId_METRIC_ID_PSTATE, -1),
+		{Device: &pb.DeviceRef{Name: "rbln0"}, MetricId: pb.MetricId_METRIC_ID_TEMPERATURE_MILLI_CELSIUS},
+	})
+	d := collect(t, startFake(t, server))[0]
 	if d.Utilization != nil || d.Power != nil || d.MemoryUsedBytes != nil || d.PState != nil || d.Temperature != nil {
 		t.Fatalf("bad sample accepted: %+v", d)
 	}
 }
 
 func TestPStateUsesTheDaemonSampleWithoutClientSideOrdinalLimit(t *testing.T) {
-	d := DeviceInfo{}
-	applySample(&d, smdtest.Int("", pb.MetricId_METRIC_ID_PSTATE, 15))
+	server := &smdtest.Server{}
+	server.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, []*pb.MetricSample{smdtest.Int("rbln0", pb.MetricId_METRIC_ID_PSTATE, 15)})
+	d := collect(t, startFake(t, server))[0]
 	if d.PState == nil || *d.PState != 15 {
-		t.Fatal("valid nonnegative p-state sample discarded by an exporter-specific bound")
+		t.Fatal("valid p-state sample discarded")
 	}
 }
 
@@ -292,9 +292,7 @@ func TestPartitionProfileUsesParentSysfs(t *testing.T) {
 	o.PCIDevicesPath = root
 	c := startFake(t, s, o)
 	for _, mode := range []string{"4", "1", "garbage"} {
-		if err := os.WriteFile(filepath.Join(root, pf.PciBusId, "sriov_numvfs"), []byte(mode), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		smdtest.Partition(t, root, pf.PciBusId, mode)
 		got := collect(t, c)
 		want := ""
 		if mode != "garbage" {
@@ -367,9 +365,7 @@ func TestVFIOBindingExcludesCachedNativeDevice(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/sys/bus/pci/drivers/vfio-pci", filepath.Join(dir, "driver")); err != nil {
-		t.Fatal(err)
-	}
+	smdtest.PCIEntry(t, root, d.PciBusId, "vfio-pci")
 	s := &smdtest.Server{}
 	s.Set([]*pb.DeviceInfo{d}, nil)
 	opts := DefaultOptions()
@@ -463,5 +459,14 @@ func TestTLSRejectsUntrustedDaemon(t *testing.T) {
 	defer s.Mu.Unlock()
 	if len(s.InventoryRequests) != 0 {
 		t.Fatal("untrusted connection reached the daemon")
+	}
+}
+
+func TestSuccessfulEmptySampleOmitsValues(t *testing.T) {
+	s := &smdtest.Server{}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	d := collect(t, startFake(t, s))[0]
+	if !d.CollectionSucceeded || d.Power != nil || d.Temperature != nil || d.Utilization != nil || d.MemoryUsedBytes != nil || d.PState != nil {
+		t.Fatalf("empty successful response fabricated readings or failed collection: %+v", d)
 	}
 }

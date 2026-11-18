@@ -4,29 +4,31 @@ import (
 	"context"
 	"testing"
 
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest"
-	legacy "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicespb"
-	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
+	legacy "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v0"
+	pb "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v1"
 )
 
+func expectedLegacyState(raw legacy.DeviceStatus) system.State {
+	states := map[legacy.DeviceStatus]system.State{legacy.DeviceStatus_READY: system.StateReady, legacy.DeviceStatus_BUSY: system.StateBusy, legacy.DeviceStatus_INIT: system.StateInit, legacy.DeviceStatus_FAULT: system.StateFault, legacy.DeviceStatus_FINISH: system.StateFinish}
+	value, ok := states[raw]
+	if !ok {
+		return system.StateUnknown
+	}
+	return value
+}
+
 func TestLegacyStateNumbersAndReadiness(t *testing.T) {
-	for _, tc := range []struct {
-		old  legacy.DeviceStatus
-		want pb.DeviceState
-	}{
-		{legacy.DeviceStatus_READY, pb.DeviceState_DEVICE_STATE_READY},
-		{legacy.DeviceStatus_BUSY, pb.DeviceState_DEVICE_STATE_BUSY},
-		{legacy.DeviceStatus_INIT, pb.DeviceState_DEVICE_STATE_INIT},
-		{legacy.DeviceStatus_FAULT, pb.DeviceState_DEVICE_STATE_FAULT},
-		{legacy.DeviceStatus_FINISH, pb.DeviceState_DEVICE_STATE_FINISH},
-		{legacy.DeviceStatus_NOT_FOUND, pb.DeviceState_DEVICE_STATE_UNSPECIFIED},
-		{legacy.DeviceStatus(99), pb.DeviceState_DEVICE_STATE_UNSPECIFIED},
-	} {
-		if got := legacyState(tc.old); got != tc.want {
-			t.Fatalf("%v mapped to %v instead of %v", tc.old, got, tc.want)
+	for _, raw := range []legacy.DeviceStatus{legacy.DeviceStatus_READY, legacy.DeviceStatus_BUSY, legacy.DeviceStatus_INIT, legacy.DeviceStatus_FAULT, legacy.DeviceStatus_FINISH, legacy.DeviceStatus_NOT_FOUND, 99} {
+		server := &smdtest.Server{LegacyOnly: true, Legacy: &smdtest.LegacyServer{Devices: []*legacy.Device{{Name: "rbln0"}}, Infos: []*legacy.DeviceInfo{{Name: "rbln0", DevStatus: raw}}}}
+		got := collect(t, startFake(t, server))
+		if len(got) != 1 || got[0].DevState != expectedLegacyState(raw) {
+			t.Fatalf("legacy state %v: %+v", raw, got)
 		}
 	}
 }
@@ -42,7 +44,7 @@ func TestV1UnknownStateUsesLegacyStateWithoutReplacingReadings(t *testing.T) {
 	s := &smdtest.Server{Legacy: old}
 	s.Set([]*pb.DeviceInfo{a, b}, []*pb.MetricSample{smdtest.Int(a.Name, pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, 123), smdtest.Float(a.Name, pb.MetricId_METRIC_ID_UTILIZATION_PERCENT_MILLI, 12500)})
 	got := collect(t, startFake(t, s))
-	if got[0].DevState != pb.DeviceState_DEVICE_STATE_BUSY || got[1].DevState != pb.DeviceState_DEVICE_STATE_FAULT {
+	if got[0].DevState != system.StateBusy || got[1].DevState != system.StateFault {
 		t.Fatalf("state selection: %+v", got)
 	}
 	if *got[0].MemoryUsedBytes != 123 || *got[0].Utilization != 12.5 {
@@ -79,7 +81,7 @@ func TestLegacyStateErrorsKeepV1ReadingsAndReportPartialFailure(t *testing.T) {
 			s := &smdtest.Server{Legacy: old}
 			s.Set([]*pb.DeviceInfo{d}, []*pb.MetricSample{smdtest.Int(d.Name, pb.MetricId_METRIC_ID_MEMORY_USED_BYTES, 321)})
 			got := collect(t, startFake(t, s))[0]
-			if got.DevState != pb.DeviceState_DEVICE_STATE_UNSPECIFIED || *got.MemoryUsedBytes != 321 {
+			if got.DevState != system.StateUnknown || *got.MemoryUsedBytes != 321 {
 				t.Fatal("partial legacy stream applied or v1 data discarded")
 			}
 			if got.CollectionSucceeded != (code == codes.Unimplemented) {
@@ -134,7 +136,7 @@ func TestLegacyFailedReadingsDoNotReportSuccessfulCollection(t *testing.T) {
 			if got[0].CollectionSucceeded || got[0].Temperature != nil || got[0].MemoryUsedBytes != nil || got[0].PState != nil {
 				t.Fatalf("FAILED response treated as valid telemetry: %+v", got[0])
 			}
-			if got[0].DevState != legacyState(state) {
+			if got[0].DevState != expectedLegacyState(state) {
 				t.Fatal("query failure replaced the device's lifecycle state")
 			}
 			if !got[1].CollectionSucceeded || got[1].MemoryUsedBytes == nil || *got[1].MemoryUsedBytes != 2<<30 {
@@ -144,7 +146,7 @@ func TestLegacyFailedReadingsDoNotReportSuccessfulCollection(t *testing.T) {
 			old.Infos[0].ErrStatus = legacy.Status_SUCCEED
 			old.Mu.Unlock()
 			recovered := collect(t, c)[0]
-			if !recovered.CollectionSucceeded || recovered.MemoryUsedBytes == nil || *recovered.MemoryUsedBytes != 1<<30 || recovered.DevState != legacyState(state) {
+			if !recovered.CollectionSucceeded || recovered.MemoryUsedBytes == nil || *recovered.MemoryUsedBytes != 1<<30 || recovered.DevState != expectedLegacyState(state) {
 				t.Fatalf("collection did not recover independently of readiness: %+v", recovered)
 			}
 		})
@@ -202,5 +204,48 @@ func TestAPIAvailabilityIsRecheckedAfterDaemonUpgrade(t *testing.T) {
 	defer old.Mu.Unlock()
 	if old.Calls["total"] != 1 {
 		t.Fatal("continued reading v0 with complete v1 support")
+	}
+}
+
+func TestUnimplementedTopologyFallsBackBeforeGroupCreation(t *testing.T) {
+	old := &smdtest.LegacyServer{Devices: []*legacy.Device{{Name: "rbln0", DevId: "UNKNOWN"}}, Infos: []*legacy.DeviceInfo{{Name: "rbln0"}}}
+	s := &smdtest.Server{Legacy: old, Errors: map[string]error{"topology": status.Error(codes.Unimplemented, "older server")}}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	got := collect(t, startFake(t, s))
+	if len(got) != 1 || got[0].DeviceID != "UNKNOWN" {
+		t.Fatalf("legacy device label: %+v", got)
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if len(s.Created) != 0 || s.SampleCalls != 0 {
+		t.Fatalf("v1 effects before fallback: created=%d sampled=%d", len(s.Created), s.SampleCalls)
+	}
+}
+
+func TestUnimplementedCreateReturnsCommandFailure(t *testing.T) {
+	old := &smdtest.LegacyServer{}
+	s := &smdtest.Server{Legacy: old, Errors: map[string]error{"create": status.Error(codes.Unimplemented, "read-only daemon")}}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	_, err := startFake(t, s).GetDeviceInfo(context.Background())
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("create error: %v", err)
+	}
+	old.Mu.Lock()
+	defer old.Mu.Unlock()
+	if len(old.Calls) != 0 {
+		t.Fatalf("legacy calls after create failure: %v", old.Calls)
+	}
+}
+
+func TestV1DeviceIDLabelKeepsReportedValue(t *testing.T) {
+	for _, id := range []string{"UNKNOWN", "0x1220", "0000", ""} {
+		d := smdtest.Device("rbln0", false)
+		d.DevId = id
+		s := &smdtest.Server{}
+		s.Set([]*pb.DeviceInfo{d}, nil)
+		got := collect(t, startFake(t, s))
+		if len(got) != 1 || got[0].DeviceID != id {
+			t.Fatalf("reported ID %q: %+v", id, got)
+		}
 	}
 }

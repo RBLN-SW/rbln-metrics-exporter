@@ -32,7 +32,7 @@
 // - protoc             v6.32.0
 // source: rbln_smd_v1.proto
 
-package rblnservicesv1pb
+package smdv1
 
 import (
 	context "context"
@@ -330,7 +330,8 @@ type MetricServiceClient interface {
 	//	included).
 	CreateMetricGroup(ctx context.Context, in *CreateMetricGroupRequest, opts ...grpc.CallOption) (*CreateMetricGroupResponse, error)
 	// Updates an existing group's metric ids, device scope, or sampling
-	// policy. Fields left at their default are unchanged.
+	// policy. Which fields change is set by `update_mask`; see
+	// UpdateMetricGroupRequest.
 	//
 	// Concurrency : see CreateMetricGroup.
 	UpdateMetricGroup(ctx context.Context, in *UpdateMetricGroupRequest, opts ...grpc.CallOption) (*UpdateMetricGroupResponse, error)
@@ -438,7 +439,8 @@ type MetricServiceServer interface {
 	//	included).
 	CreateMetricGroup(context.Context, *CreateMetricGroupRequest) (*CreateMetricGroupResponse, error)
 	// Updates an existing group's metric ids, device scope, or sampling
-	// policy. Fields left at their default are unchanged.
+	// policy. Which fields change is set by `update_mask`; see
+	// UpdateMetricGroupRequest.
 	//
 	// Concurrency : see CreateMetricGroup.
 	UpdateMetricGroup(context.Context, *UpdateMetricGroupRequest) (*UpdateMetricGroupResponse, error)
@@ -662,9 +664,23 @@ type ControlServiceClient interface {
 	// Resets the device(s) selected by `targets`.
 	//
 	// Operation type     : Command (state-mutating).
+	// Targets            : a device list must name at least one device and
+	//
+	//	no device name may be empty; otherwise the request
+	//	is rejected with INVALID_ARGUMENT. A device named
+	//	more than once is reset once. A named device the
+	//	host does not have is reported in its `results`
+	//	entry as not found.
+	//
 	// State precondition : each target device must be in
 	//
 	//	`DEVICE_STATE_READY` or `DEVICE_STATE_FAULT`.
+	//
+	// Wait policy        : returns once every target has been reset, one
+	//
+	//	target after another. A reset that fails leaves
+	//	the device in `DEVICE_STATE_FAULT` and is reported
+	//	in its `results` entry as a device-side failure.
 	//
 	// Privilege          : privileged tier (mTLS-authenticated client with
 	//
@@ -676,10 +692,12 @@ type ControlServiceClient interface {
 	//
 	// Concurrency        : resets serialize per targeted device — resets of
 	//
-	//	disjoint devices run concurrently, while a second
-	//	reset that overlaps a device already resetting (the
-	//	same device, or a group target sharing a member) is
-	//	rejected with ABORTED. Queries are never blocked.
+	//	disjoint devices run concurrently. A target that a
+	//	concurrent Command holds (another reset of the same
+	//	device or of a group sharing a member, or a
+	//	daemon-wide Command) is not reset: its `results`
+	//	entry reports it busy, and the request's other
+	//	targets proceed. Queries are never blocked.
 	ResetDevice(ctx context.Context, in *ResetDeviceRequest, opts ...grpc.CallOption) (*ResetDeviceResponse, error)
 	// Enables `num_vfs` SR-IOV virtual functions on each physical function
 	// selected by `targets`. If a PF cannot be enabled in place, the daemon
@@ -756,9 +774,23 @@ type ControlServiceServer interface {
 	// Resets the device(s) selected by `targets`.
 	//
 	// Operation type     : Command (state-mutating).
+	// Targets            : a device list must name at least one device and
+	//
+	//	no device name may be empty; otherwise the request
+	//	is rejected with INVALID_ARGUMENT. A device named
+	//	more than once is reset once. A named device the
+	//	host does not have is reported in its `results`
+	//	entry as not found.
+	//
 	// State precondition : each target device must be in
 	//
 	//	`DEVICE_STATE_READY` or `DEVICE_STATE_FAULT`.
+	//
+	// Wait policy        : returns once every target has been reset, one
+	//
+	//	target after another. A reset that fails leaves
+	//	the device in `DEVICE_STATE_FAULT` and is reported
+	//	in its `results` entry as a device-side failure.
 	//
 	// Privilege          : privileged tier (mTLS-authenticated client with
 	//
@@ -770,10 +802,12 @@ type ControlServiceServer interface {
 	//
 	// Concurrency        : resets serialize per targeted device — resets of
 	//
-	//	disjoint devices run concurrently, while a second
-	//	reset that overlaps a device already resetting (the
-	//	same device, or a group target sharing a member) is
-	//	rejected with ABORTED. Queries are never blocked.
+	//	disjoint devices run concurrently. A target that a
+	//	concurrent Command holds (another reset of the same
+	//	device or of a group sharing a member, or a
+	//	daemon-wide Command) is not reset: its `results`
+	//	entry reports it busy, and the request's other
+	//	targets proceed. Queries are never blocked.
 	ResetDevice(context.Context, *ResetDeviceRequest) (*ResetDeviceResponse, error)
 	// Enables `num_vfs` SR-IOV virtual functions on each physical function
 	// selected by `targets`. If a PF cannot be enabled in place, the daemon

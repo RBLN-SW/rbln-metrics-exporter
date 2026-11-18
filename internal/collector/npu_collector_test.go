@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"google.golang.org/grpc/codes"
@@ -14,7 +16,7 @@ import (
 
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest"
-	pb "github.com/rebellions-sw/rbln-metrics-exporter/pkg/rblnservicesv1pb"
+	pb "github.com/rebellions-sw/rbln-metrics-exporter/internal/smdtest/wire/v1"
 )
 
 func sampleByDevice(t *testing.T, r *prometheus.Registry, metricName, device string) *dto.Metric {
@@ -65,9 +67,7 @@ func TestCollectionVFProfilesAndSeriesLifecycle(t *testing.T) {
 	}
 	mode := func(v string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(root, pf.PciBusId, "sriov_numvfs"), []byte(v), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		smdtest.Partition(t, root, pf.PciBusId, v)
 	}
 	mode("4")
 	s := &smdtest.Server{}
@@ -162,7 +162,7 @@ func TestUnspecifiedDeviceStatePreservesNotFoundWithoutHealth(t *testing.T) {
 	health := NewDeviceHealthMetric(mapper, "node", false)
 	state.Register(r)
 	health.Register(r)
-	devices := []daemon.DeviceInfo{{Name: "unspecified", DevState: pb.DeviceState_DEVICE_STATE_UNSPECIFIED}, {Name: "future", DevState: pb.DeviceState(999)}}
+	devices := []daemon.DeviceInfo{{Name: "unspecified", DevState: system.StateUnknown}, {Name: "future", DevState: system.State("future")}}
 	state.UpdateMetrics(context.Background(), devices)
 	health.UpdateMetrics(context.Background(), devices)
 	families, err := r.Gather()
@@ -205,12 +205,12 @@ func TestHealthPreservesReadinessAndDoesNotRepresentCollection(t *testing.T) {
 			health.Register(r)
 			collection.Register(r)
 			devices := []daemon.DeviceInfo{
-				{Name: "ready", DevState: pb.DeviceState_DEVICE_STATE_READY, CollectionSucceeded: false},
-				{Name: "busy", DevState: pb.DeviceState_DEVICE_STATE_BUSY, CollectionSucceeded: true},
-				{Name: "init", DevState: pb.DeviceState_DEVICE_STATE_INIT, CollectionSucceeded: true},
-				{Name: "fault", DevState: pb.DeviceState_DEVICE_STATE_FAULT, CollectionSucceeded: true},
-				{Name: "finish", DevState: pb.DeviceState_DEVICE_STATE_FINISH, CollectionSucceeded: true},
-				{Name: "unknown", DevState: pb.DeviceState_DEVICE_STATE_UNSPECIFIED, CollectionSucceeded: true},
+				{Name: "ready", DevState: system.StateReady, CollectionSucceeded: false},
+				{Name: "busy", DevState: system.StateBusy, CollectionSucceeded: true},
+				{Name: "init", DevState: system.StateInit, CollectionSucceeded: true},
+				{Name: "fault", DevState: system.StateFault, CollectionSucceeded: true},
+				{Name: "finish", DevState: system.StateFinish, CollectionSucceeded: true},
+				{Name: "unknown", DevState: system.StateUnknown, CollectionSucceeded: true},
 			}
 			health.UpdateMetrics(context.Background(), devices)
 			collection.UpdateMetrics(context.Background(), devices)
