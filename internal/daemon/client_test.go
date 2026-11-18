@@ -261,6 +261,7 @@ func TestInvalidSamplesAreAbsent(t *testing.T) {
 		t.Fatalf("bad sample accepted: %+v", d)
 	}
 }
+
 func TestPStateUsesTheDaemonSampleWithoutClientSideOrdinalLimit(t *testing.T) {
 	server := &smdtest.Server{}
 	server.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, []*pb.MetricSample{smdtest.Int("rbln0", pb.MetricId_METRIC_ID_PSTATE, 15)})

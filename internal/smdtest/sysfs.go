@@ -12,17 +12,17 @@ import (
 func PCIEntry(t testing.TB, root, bus, driver string) {
 	t.Helper()
 	dir := filepath.Join(root, bus)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for attr, value := range map[string]string{"vendor": "0x1eff", "class": "0x120000", "device": "0x2130"} {
-		if err := os.WriteFile(filepath.Join(dir, attr), []byte(value), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, attr), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if driver != "" {
 		target := filepath.Join(root, ".drivers", driver)
-		if err := os.MkdirAll(target, 0755); err != nil {
+		if err := os.MkdirAll(target, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		link := filepath.Join(dir, "driver")
@@ -39,7 +39,7 @@ func PCIEntry(t testing.TB, root, bus, driver string) {
 func Partition(t testing.TB, root, pf, mode string) {
 	t.Helper()
 	PCIEntry(t, root, pf, "rebellions")
-	if err := os.WriteFile(filepath.Join(root, pf, "sriov_numvfs"), []byte(mode), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, pf, "sriov_numvfs"), []byte(mode), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	n, err := strconv.Atoi(mode)

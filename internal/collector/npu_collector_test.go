@@ -3,10 +3,11 @@ package collector
 import (
 	"context"
 	"fmt"
-	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 	"os"
 	"path/filepath"
 	"testing"
+
+	system "github.com/rbln-sw/rblnlib-go/pkg/system/v1"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"

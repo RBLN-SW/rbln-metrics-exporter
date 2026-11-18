@@ -22,6 +22,7 @@ func expectedLegacyState(raw legacy.DeviceStatus) system.State {
 	}
 	return value
 }
+
 func TestLegacyStateNumbersAndReadiness(t *testing.T) {
 	for _, raw := range []legacy.DeviceStatus{legacy.DeviceStatus_READY, legacy.DeviceStatus_BUSY, legacy.DeviceStatus_INIT, legacy.DeviceStatus_FAULT, legacy.DeviceStatus_FINISH, legacy.DeviceStatus_NOT_FOUND, 99} {
 		server := &smdtest.Server{LegacyOnly: true, Legacy: &smdtest.LegacyServer{Devices: []*legacy.Device{{Name: "rbln0"}}, Infos: []*legacy.DeviceInfo{{Name: "rbln0", DevStatus: raw}}}}
