@@ -290,6 +290,7 @@ func (c *Client) GetDevice(ctx context.Context, address string) (system.Device, 
 		return d, err
 	}
 	d.DeviceID = uint16(id)
+	d.DeviceIDKnown = true
 	d.ProductName = c.products.Lookup(d.DeviceID)
 	d.Driver, err = c.CurrentDriver(ctx, address)
 	d.DriverKnown = err == nil

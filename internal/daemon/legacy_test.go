@@ -205,3 +205,46 @@ func TestAPIAvailabilityIsRecheckedAfterDaemonUpgrade(t *testing.T) {
 		t.Fatal("continued reading v0 with complete v1 support")
 	}
 }
+
+func TestUnimplementedTopologyFallsBackBeforeGroupCreation(t *testing.T) {
+	old := &smdtest.LegacyServer{Devices: []*legacy.Device{{Name: "rbln0", DevId: "UNKNOWN"}}, Infos: []*legacy.DeviceInfo{{Name: "rbln0"}}}
+	s := &smdtest.Server{Legacy: old, Errors: map[string]error{"topology": status.Error(codes.Unimplemented, "older server")}}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	got := collect(t, startFake(t, s))
+	if len(got) != 1 || got[0].DeviceID != "UNKNOWN" {
+		t.Fatalf("legacy device label: %+v", got)
+	}
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+	if len(s.Created) != 0 || s.SampleCalls != 0 {
+		t.Fatalf("v1 effects before fallback: created=%d sampled=%d", len(s.Created), s.SampleCalls)
+	}
+}
+
+func TestUnimplementedCreateReturnsCommandFailure(t *testing.T) {
+	old := &smdtest.LegacyServer{}
+	s := &smdtest.Server{Legacy: old, Errors: map[string]error{"create": status.Error(codes.Unimplemented, "read-only daemon")}}
+	s.Set([]*pb.DeviceInfo{smdtest.Device("rbln0", false)}, nil)
+	_, err := startFake(t, s).GetDeviceInfo(context.Background())
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("create error: %v", err)
+	}
+	old.Mu.Lock()
+	defer old.Mu.Unlock()
+	if len(old.Calls) != 0 {
+		t.Fatalf("legacy calls after create failure: %v", old.Calls)
+	}
+}
+
+func TestV1DeviceIDLabelKeepsReportedValue(t *testing.T) {
+	for _, id := range []string{"UNKNOWN", "0x1220", "0000", ""} {
+		d := smdtest.Device("rbln0", false)
+		d.DevId = id
+		s := &smdtest.Server{}
+		s.Set([]*pb.DeviceInfo{d}, nil)
+		got := collect(t, startFake(t, s))
+		if len(got) != 1 || got[0].DeviceID != id {
+			t.Fatalf("reported ID %q: %+v", id, got)
+		}
+	}
+}

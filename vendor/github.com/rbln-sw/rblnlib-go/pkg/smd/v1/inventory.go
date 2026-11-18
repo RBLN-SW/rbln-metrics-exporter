@@ -15,9 +15,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type unsupportedInventory struct{ error }
+type unsupportedQuery struct{ error }
 
-func (e *unsupportedInventory) Unwrap() error { return e.error }
+func (e *unsupportedQuery) Unwrap() error { return e.error }
 
 // ListDevices reads cached daemon inventory. It does not assert live PCI
 // topology, binding, node existence, or atomicity across pages. Use host/v1
@@ -26,7 +26,7 @@ func (c *Client) ListDevices(ctx context.Context) (system.Snapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.opts.QueryTimeout)
 	defer cancel()
 	snapshot, err := c.listV1(ctx)
-	var unsupported *unsupportedInventory
+	var unsupported *unsupportedQuery
 	if errors.As(err, &unsupported) && !c.opts.DisableLegacy {
 		return c.listLegacy(ctx)
 	}
@@ -96,7 +96,7 @@ func (c *Client) listV1(ctx context.Context) (system.Snapshot, error) {
 				return s, rpcError("ListDevices page", token, err)
 			}
 			if status.Code(err) == codes.Unimplemented {
-				return s, &unsupportedInventory{err}
+				return s, &unsupportedQuery{rpcError("ListDevices", c.opts.Endpoint, err)}
 			}
 			return s, err
 		}
@@ -163,6 +163,7 @@ func deviceFromV1(raw *pb.DeviceInfo) (system.Device, error) {
 		return d, system.FieldError(d.Name, "name", "invalid function name")
 	}
 	var err error
+	d.ReportedPCI = &system.ReportedPCI{Address: raw.GetPciBusId(), DeviceID: raw.GetDevId()}
 	d.PCIAddress, err = system.NormalizePCIAddress(raw.GetPciBusId())
 	if err != nil {
 		return d, system.FieldError(d.Name, "pci_bus_id", raw.GetPciBusId())
@@ -177,6 +178,7 @@ func deviceFromV1(raw *pb.DeviceInfo) (system.Device, error) {
 	}
 	if id, e := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(raw.GetDevId()), "0x"), 16, 16); e == nil {
 		d.DeviceID = uint16(id)
+		d.DeviceIDKnown = true
 	} else {
 		d.Issues = append(d.Issues, system.Issue{Target: d.Name, Field: "device_id", Err: system.FieldError(d.Name, "device_id", raw.GetDevId())})
 	}

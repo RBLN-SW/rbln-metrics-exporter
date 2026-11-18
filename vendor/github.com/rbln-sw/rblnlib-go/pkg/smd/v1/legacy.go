@@ -75,6 +75,7 @@ func (c *Client) listLegacyInventory(ctx context.Context, withInfo bool) (system
 			return s, rpcError("legacy inventory stream", "", err)
 		}
 		d := system.Device{EnabledVFs: system.Pointer(raw.GetNumVfs()), Name: raw.GetName(), UUID: raw.GetUuid(), ProductName: raw.GetCardName(), ParentName: raw.GetParentName(), State: system.StateUnknown, FunctionKind: system.PhysicalFunction, VendorID: system.VendorID, Class: system.NPUClass, Compute: system.Pointer(raw.GetIsVf() || raw.GetNumVfs() == 0)}
+		d.ReportedPCI = &system.ReportedPCI{Address: raw.GetPciBusId(), DeviceID: raw.GetDevId()}
 		d.PCIAddress, err = system.NormalizePCIAddress(raw.GetPciBusId())
 		if err != nil || system.ValidTargets([]string{d.Name}) != nil {
 			s.Issues = append(s.Issues, system.Issue{Target: d.Name, Field: "identity", Err: system.FieldError(d.Name, "legacy inventory", "invalid identity")})
@@ -91,6 +92,7 @@ func (c *Client) listLegacyInventory(ctx context.Context, withInfo bool) (system
 		}
 		if n, e := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(raw.GetDevId()), "0x"), 16, 16); e == nil {
 			d.DeviceID = uint16(n)
+			d.DeviceIDKnown = true
 		} else {
 			d.Issues = append(d.Issues, system.Issue{Target: d.Name, Field: "device_id", Err: system.FieldError(d.Name, "device_id", raw.GetDevId())})
 		}

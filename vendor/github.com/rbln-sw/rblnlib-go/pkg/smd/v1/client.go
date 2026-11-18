@@ -93,7 +93,12 @@ func rpcError(op, target string, err error) error {
 		kind = system.NotFound
 	case codes.FailedPrecondition:
 		kind = system.NotReady
-	case codes.Aborted, codes.ResourceExhausted:
+	case codes.Aborted:
+		kind = system.Conflict
+		if operationInProgress(err) {
+			kind = system.Busy
+		}
+	case codes.ResourceExhausted:
 		kind = system.Busy
 	case codes.PermissionDenied, codes.Unauthenticated:
 		kind = system.PermissionDenied
@@ -122,6 +127,11 @@ func detailError(op, target string, d *pb.ErrorDetail) error {
 	}
 	kind := system.Internal
 	switch d.OsErrno {
+	case 0:
+		// A coordinator conflict is reported without a syscall errno.
+		if d.Category == pb.ErrorCategory_ERROR_CATEGORY_CONFIG && d.Code == 7003 {
+			kind = system.Busy
+		}
 	case 1, 13:
 		kind = system.PermissionDenied
 	case 2, 19:

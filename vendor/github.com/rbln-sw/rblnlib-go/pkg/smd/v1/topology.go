@@ -2,6 +2,8 @@ package smd
 
 import (
 	"context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"math"
 	"strconv"
 	"strings"
@@ -49,6 +51,9 @@ func (c *Client) ListTopology(ctx context.Context) (TopologySnapshot, error) {
 	for {
 		r, err := c.topology.ListTopology(ctx, &pb.ListTopologyRequest{PageSize: 1000, PageToken: token})
 		if err != nil {
+			if token == "" && status.Code(err) == codes.Unimplemented {
+				return out, &unsupportedQuery{rpcError("ListTopology", "", err)}
+			}
 			return out, rpcError("ListTopology", "", err)
 		}
 		out.Issues = append(out.Issues, unreachable("topology", r.GetUnreachable())...)

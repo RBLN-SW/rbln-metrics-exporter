@@ -94,7 +94,13 @@ func (c *Client) GetDeviceInfo(ctx context.Context) ([]DeviceInfo, error) {
 				continue
 			}
 		}
-		d := DeviceInfo{UUID: raw.UUID, Name: raw.Name, DeviceID: fmt.Sprintf("%04x", raw.DeviceID), Card: raw.ProductName, PCIBusID: raw.PCIAddress, IsVF: raw.FunctionKind == system.VirtualFunction, ParentName: raw.ParentName, NumVFs: raw.EnabledVFs, Compute: raw.Compute != nil && *raw.Compute, DriverVersion: raw.Versions.Driver, FirmwareVersion: raw.Versions.Firmware, SMCVersion: raw.Versions.SMC, DevState: raw.State, CollectionSucceeded: !failures[raw.Name]}
+		deviceID := ""
+		if raw.ReportedPCI != nil {
+			deviceID = raw.ReportedPCI.DeviceID
+		} else if raw.DeviceIDKnown {
+			deviceID = fmt.Sprintf("%04x", raw.DeviceID)
+		}
+		d := DeviceInfo{UUID: raw.UUID, Name: raw.Name, DeviceID: deviceID, Card: raw.ProductName, PCIBusID: raw.PCIAddress, IsVF: raw.FunctionKind == system.VirtualFunction, ParentName: raw.ParentName, NumVFs: raw.EnabledVFs, Compute: raw.Compute != nil && *raw.Compute, DriverVersion: raw.Versions.Driver, FirmwareVersion: raw.Versions.Firmware, SMCVersion: raw.Versions.SMC, DevState: raw.State, CollectionSucceeded: !failures[raw.Name]}
 		c.partitionMetadata(ctx, &d, byAddress)
 		for _, issue := range append(append([]system.Issue(nil), raw.Issues...), reading.Issues...) {
 			// Unsupported/malformed individual values are absent readings. Collection

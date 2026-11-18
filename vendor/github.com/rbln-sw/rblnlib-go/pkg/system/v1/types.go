@@ -93,11 +93,22 @@ type Topology struct {
 	RSDGroup                                      string
 }
 
+// ReportedPCI retains the spelling supplied by a metadata backend for existing
+// selectors and labels. Use the normalized Device and Topology fields for
+// comparisons. Nil optional strings use normalized formatting when projected
+// into the legacy metadata shape. A reported empty string is preserved.
+type ReportedPCI struct {
+	Address, DeviceID              string
+	NUMANode, LinkSpeed, LinkWidth *string
+}
+
 type Device struct {
 	PCIAddress                   string
 	Name                         string // backend/driver function name; never a path
 	UUID, Serial, ProductName    string
 	VendorID, DeviceID           uint16
+	DeviceIDKnown                bool // true when DeviceID was read successfully, including zero
+	ReportedPCI                  *ReportedPCI
 	Class                        uint32
 	Driver                       string // empty and DriverKnown=true means unbound
 	DriverKnown                  bool
