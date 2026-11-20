@@ -49,6 +49,9 @@ jobs:
   # disable rebuilding and target the release commit's rc-validation status.
   rc-validate:
     name: piper RC validation
+    permissions:
+      contents: read
+      statuses: read
     needs: release
     if: needs.release.outputs.kind == 'rc'
     runs-on: rbln-sw-k8s-general
@@ -60,10 +63,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release.outputs.sha }}
+      - name: Ensure system Python has PyYAML
+        run: /usr/bin/python3 -c 'import yaml' 2>/dev/null || (sudo apt-get update && sudo apt-get install -y python3-yaml)
       - name: Trigger piper and wait for its RC verdict
         id: validate
         env:
           PIPER_URL: ${{ vars.PIPER_URL || 'https://piper.k8s.rebellions.in' }}
+          GITHUB_TOKEN: ${{ github.token }}
           PIPER_TOKEN: ${{ secrets.PIPER_TOKEN }}
           PIPER_RC_BUNDLE_ID: ${{ vars.PIPER_RC_BUNDLE_ID }}
           RC_TAG: ${{ github.ref_name }}
@@ -72,4 +78,4 @@ jobs:
           HARBOR_REGISTRY: ${{ vars.CLOUD_COMPONENT_HARBOR_REGISTRY }}
           SENTINEL_REF: ${{ vars.RC_VALIDATION_SENTINEL_REF }}
           OPERATOR_REF: ${{ vars.RC_VALIDATION_OPERATOR_REF }}
-        run: python3 .github/scripts/piper_rc.py
+        run: /usr/bin/python3 .github/scripts/piper_rc.py

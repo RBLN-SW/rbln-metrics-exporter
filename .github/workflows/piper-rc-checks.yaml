@@ -2,6 +2,7 @@ name: piper RC contract
 on:
   pull_request:
     paths:
+      - '.buildkite/pipeline.piper.pr.yml'
       - '.github/scripts/piper*'
       - '.github/scripts/test_piper_rc.py'
       - '.github/workflows/release.yaml'
@@ -9,6 +10,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.buildkite/pipeline.piper.pr.yml'
       - '.github/scripts/piper*'
       - '.github/scripts/test_piper_rc.py'
       - '.github/workflows/release.yaml'
@@ -20,5 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure system Python has PyYAML
+        run: /usr/bin/python3 -c 'import yaml' 2>/dev/null || (sudo apt-get update && sudo apt-get install -y python3-yaml)
       - name: Check RC request and result handling without external calls
-        run: python3 -m unittest discover -s .github/scripts -p 'test_piper_rc.py' -v
+        run: /usr/bin/python3 -m unittest discover -s .github/scripts -p 'test_piper_rc.py' -v

@@ -33,6 +33,7 @@ PIPELINE = {
     "scenarios": [{"family": "components/device_plugin", "subtests": []}],
 }
 BUILD = {"number": 42, "url": "https://ob.example/builds/42", "env": {"PIPER_RUN": "run42"}}
+BOOTSTRAP = (rc.CONFIG.parents[2] / ".buildkite/pipeline.piper.pr.yml").read_text()
 
 
 class Fake:
@@ -40,6 +41,7 @@ class Fake:
         self.calls = []
         self.bootstrap = True
         self.entrypoint = True
+        self.ob_configuration = None
         self.trigger_error = None
 
     def request(self, method, path, payload=None):
@@ -56,7 +58,9 @@ class Fake:
         if path.endswith("/ob/bootstrap"):
             return {"matches": self.entrypoint}
         if path.endswith("/bootstrap"):
-            return {"matches": self.bootstrap}
+            return {"matches": self.bootstrap, "content": BOOTSTRAP}
+        if path == "/api/ob/pipelines/pr-device":
+            return {"configuration": self.ob_configuration}
         if path.endswith("/trigger"):
             if self.trigger_error:
                 raise self.trigger_error
@@ -195,6 +199,38 @@ class ExecutionTests(unittest.TestCase):
             rc.run(api, CONFIG, ENV)
         self.assertEqual(sum(path.endswith("/trigger") for _, path, _ in api.calls), 1)
 
+    def test_inline_bootstrap_triggers_once_with_rc_overrides(self):
+        sparse_checkout = "    plugins:\n      - sparse-checkout#v1.6.0: {paths: [.buildkite]}\n"
+        for configuration in (BOOTSTRAP, BOOTSTRAP + sparse_checkout):
+            with self.subTest(configuration=configuration):
+                api = Fake()
+                api.entrypoint = False
+                api.ob_configuration = configuration
+                with patch.object(rc, "wait_result", return_value=("passed", "success")), redirect_stdout(io.StringIO()):
+                    self.assertEqual(rc.run(api, CONFIG, ENV), 0)
+                triggers = [payload for _, path, payload in api.calls if path.endswith("/trigger")]
+                self.assertEqual(triggers, [rc.request_payload(CONFIG, ENV, [PIPELINE])])
+
+    def test_inline_bootstrap_must_use_the_registered_bundle_and_run(self):
+        cases = {
+            "wrong server": BOOTSTRAP.replace("piper.k8s.rebellions.in", "other.example"),
+            "wrong repository": BOOTSTRAP.replace("/rbln-metrics-exporter/", "/another-repo/"),
+            "wrong bundle": BOOTSTRAP.replace("/pr?run=", "/nightly?run="),
+            "missing run": BOOTSTRAP.replace("?run=$${PIPER_RUN:-}", ""),
+            "overridden run": BOOTSTRAP + "    env: {PIPER_RUN: another-run}\n",
+            "different plugin": BOOTSTRAP + "    plugins: [{another-plugin#v1: {}}]\n",
+            "extra step": BOOTSTRAP + "  - command: make build-image\n",
+            "malformed YAML": "steps: [",
+        }
+        for reason, configuration in cases.items():
+            with self.subTest(reason=reason):
+                api = Fake()
+                api.entrypoint = False
+                api.ob_configuration = configuration
+                with self.assertRaisesRegex(ValueError, "OB entry point"):
+                    rc.run(api, CONFIG, ENV)
+                self.assertFalse(any(path.endswith("/trigger") for _, path, _ in api.calls))
+
     def test_old_piper_build_override_is_rejected(self):
         api = Fake()
         original = api.request
@@ -241,6 +277,32 @@ class ExecutionTests(unittest.TestCase):
             rc.wait_result(Poll(), "/api/bundles/bundle", BUILD,
                            rc.request_payload(CONFIG, ENV, [PIPELINE]), 30,
                            clock=clock.time, sleep=clock.sleep)
+
+    def test_native_ob_verdict_requires_github_status_for_this_build_and_sha(self):
+        class Piper:
+            def request(self, method, path):
+                if "/builds/" in path:
+                    return {"number": 42, "state": "passed"}
+                return {"id": "run42", "ob_build": 42, "renders": 1}
+
+        clock = Clock()
+        calls = []
+        class GitHub:
+            def request(self, method, path):
+                calls.append((method, path))
+                if path.endswith("page=1"):
+                    return [{"context": "rc-validation", "state": "success",
+                             "target_url": "https://ob.example/builds/41"}] * 100
+                return [{"context": "other", "state": "success", "target_url": BUILD["url"]},
+                        {"context": "rc-validation", "state": "success" if clock.now else "pending",
+                         "target_url": BUILD["url"]}]
+
+        payload = rc.request_payload(CONFIG, ENV, [PIPELINE])
+        result = rc.wait_result(Piper(), "/bundle", BUILD, payload, 30, github=GitHub(),
+                                clock=clock.time, sleep=clock.sleep)
+        self.assertEqual(result, ("passed", "success"))
+        path = f"/repos/{CONFIG['repository']}/commits/{SHA}/statuses?per_page=100&page="
+        self.assertEqual(calls, [("GET", path + "1"), ("GET", path + "2")] * 2)
 
     def test_only_older_operator_rcs_are_canceled(self):
         class Builds:
