@@ -16,6 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import yaml
+
 CONFIG = Path(__file__).with_name("piper-rc.json")
 PIPELINE_FIELDS = (
     "key", "name", "description", "cluster_id", "pool_id", "cluster_grace_minutes",
@@ -36,9 +38,9 @@ FINAL_STATES = {
 
 
 class APIError(RuntimeError):
-    def __init__(self, method, path, status=None):
+    def __init__(self, method, path, status=None, service="piper"):
         self.status = status
-        super().__init__(f"piper {method} {path} failed" +
+        super().__init__(f"{service} {method} {path} failed" +
                          (f" (HTTP {status})" if status else " (transport error)"))
 
 
@@ -48,14 +50,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Client:
-    def __init__(self, url, token):
+    def __init__(self, url, token, service="piper"):
+        self.service = service
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme != "https" or not parsed.netloc or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
-            raise ValueError("PIPER_URL must be an HTTPS origin")
+            raise ValueError(f"{service} URL must be an HTTPS origin")
         if parsed.path not in ("", "/"):
-            raise ValueError("PIPER_URL must not contain an API path")
+            raise ValueError(f"{service} URL must not contain an API path")
         if not token.strip():
-            raise ValueError("GitHub Actions secret PIPER_TOKEN is required")
+            raise ValueError(f"{service} token is required")
         self.url, self.token = url.rstrip("/"), token
         self.opener = urllib.request.build_opener(NoRedirect())
 
@@ -70,9 +73,9 @@ class Client:
             with self.opener.open(request, timeout=60) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise APIError(method, path, exc.code) from None
+            raise APIError(method, path, exc.code, self.service) from None
         except (urllib.error.URLError, TimeoutError, OSError):
-            raise APIError(method, path) from None
+            raise APIError(method, path, service=self.service) from None
 
 
 def required(env, key):
@@ -174,13 +177,46 @@ def prepare(client, config, env):
     return root, bundle, payload
 
 
-def ensure_bootstrap(client, root):
+def matches_inline_bootstrap(content, configuration):
+    """Compare OB's single upload step with the bootstrap generated for this bundle."""
+    if not isinstance(content, str) or not isinstance(configuration, str):
+        return False
+    try:
+        expected = yaml.safe_load(content)
+        actual = yaml.safe_load(configuration)
+    except yaml.YAMLError:
+        return False
+
+    for document in (expected, actual):
+        if not isinstance(document, dict):
+            return False
+        steps = document.get("steps")
+        if not isinstance(steps, list) or len(steps) != 1:
+            return False
+        step = steps[0]
+        if not isinstance(step, dict) or not isinstance(step.get("command"), str):
+            return False
+        step["command"] = step["command"].rstrip("\n")
+        if not step["command"].strip():
+            return False
+        step.pop("label", None)
+        # OB may limit checkout to the bootstrap directory before running the same command.
+        if step.get("plugins") == [{"sparse-checkout#v1.6.0": {"paths": [".buildkite"]}}]:
+            del step["plugins"]
+    return actual == expected
+
+
+def ensure_bootstrap(client, root, ob_pipeline):
     bootstrap = client.request("GET", root + "/bootstrap")
     if not bootstrap.get("matches"):
         raise ValueError("Merge the piper bootstrap into the execution branch and sync the piper repository")
     ob = client.request("GET", root + "/ob/bootstrap")
-    if not ob.get("matches"):
-        raise ValueError("The OB entry point still uses the old pipeline; switch it to the piper bootstrap")
+    if ob.get("matches"):
+        return
+    pipeline = client.request("GET", "/api/ob/pipelines/" + urllib.parse.quote(ob_pipeline, safe=""))
+    if not matches_inline_bootstrap(bootstrap.get("content"), pipeline.get("configuration")):
+        raise ValueError("The OB entry point must upload the registered piper bootstrap file "
+                         "or run its bundle upload command inline with PIPER_RUN")
 
 
 def cancel_superseded(client, root, config, payload):
@@ -210,7 +246,37 @@ def cancel_superseded(client, root, config, payload):
         print("::warning::Could not inspect superseded RC runs; continuing")
 
 
-def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monotonic, sleep=time.sleep):
+def github_build_status(github, target, build_url):
+    path = f"/repos/{target['repository']}/commits/{target['sha']}/statuses"
+    page = 1
+    while True:
+        statuses = github.request("GET", f"{path}?per_page=100&page={page}")
+        for status in statuses:  # GitHub returns the latest update first.
+            if status["context"] == "rc-validation" and status.get("target_url") == build_url:
+                return status["state"]
+        if len(statuses) < 100:
+            return None
+        page += 1
+
+
+def delivered_status(run, target, build_url, github):
+    delivery = run.get("status_delivery")
+    if not delivery:
+        # Native OB notifications go directly to GitHub.
+        if github:
+            return github_build_status(github, target, build_url)
+        return None
+    actual = delivery.get("target") or {}
+    if (delivery.get("error") or actual.get("repository", "").lower() != target["repository"].lower()
+            or actual.get("sha", "").lower() != target["sha"]):
+        return None
+    sent = delivery.get("sent") or {}
+    return sent.get("rc-validation") or sent.get(
+        target["repository"].lower() + "@" + target["sha"] + ":rc-validation")
+
+
+def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monotonic, sleep=time.sleep,
+                github=None):
     deadline = clock() + timeout
     number, run_id = build["number"], build["env"]["PIPER_RUN"]
     target = payload["overrides"]["status_target"]
@@ -219,27 +285,18 @@ def wait_result(client, root, build, payload, timeout, poll=15, clock=time.monot
         try:
             current = client.request("GET", f"{root}/builds/{number}")
             run = client.request("GET", "/api/runs/" + run_id)
+            if current.get("number") != number or run.get("id") != run_id or run.get("ob_build") != number:
+                raise ValueError("piper returned a different build/run")
+            state = current.get("state", "unknown")
+            if state != previous:
+                print(f"piper build #{number}: {state}", flush=True)
+                previous = state
+            verdict = FINAL_STATES.get(state)
+            if verdict and delivered_status(run, target, build["url"], github) == verdict:
+                return state, verdict
         except APIError as exc:
             if exc.status not in (None, 429, 500, 502, 503, 504):
                 raise
-            sleep(min(poll, max(0, deadline - clock())))
-            continue
-        if current.get("number") != number or run.get("id") != run_id or run.get("ob_build") != number:
-            raise ValueError("piper returned a different build/run")
-        delivery = run.get("status_delivery") or {}
-        state = current.get("state", "unknown")
-        if state != previous:
-            print(f"piper build #{number}: {state}", flush=True)
-            previous = state
-        actual_target = delivery.get("target") or {}
-        if (actual_target.get("repository", "").lower() == target["repository"].lower()
-                and actual_target.get("sha", "").lower() == target["sha"]):
-            sent = delivery.get("sent") or {}
-            delivered = sent.get("rc-validation") or sent.get(
-                target["repository"].lower() + "@" + target["sha"] + ":rc-validation")
-            verdict = FINAL_STATES.get(state)
-            if verdict and delivered == verdict and not delivery.get("error"):
-                return state, verdict
         sleep(min(poll, max(0, deadline - clock())))
     raise TimeoutError(f"Timed out waiting for piper build #{number} and its rc-validation delivery: {build['url']}")
 
@@ -253,7 +310,10 @@ def run(client, config, env, dry_run=False):
     if dry_run:
         print(json.dumps(payload, indent=2))
         return 0
-    ensure_bootstrap(client, root)
+    ensure_bootstrap(client, root, bundle["ob_pipeline"])
+    github = None
+    if env.get("GITHUB_TOKEN"):
+        github = Client("https://api.github.com", env["GITHUB_TOKEN"], "GitHub")
     cancel_superseded(client, root, config, payload)
     # One POST only. A timeout may have created the build; never replay it.
     try:
@@ -274,7 +334,7 @@ def run(client, config, env, dry_run=False):
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
             summary.write(f"RC validation for {env['RC_TAG']}: {url}\n\npiper run: {run_id}\n")
-    state, verdict = wait_result(client, root, build, payload, config["timeout_seconds"])
+    state, verdict = wait_result(client, root, build, payload, config["timeout_seconds"], github=github)
     print(f"piper/OB result: {state}; rc-validation delivery: {verdict}", flush=True)
     return 0 if verdict == "success" else 1
 

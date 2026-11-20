@@ -1,4 +1,4 @@
-ARG GOLANG_VERSION=1.26.10
+ARG GOLANG_VERSION=1.26.11
 # Pinned to the build host: the Go toolchain cross-compiles for TARGETARCH
 # below instead of running under QEMU when the image is built for arm64.
 FROM --platform=$BUILDPLATFORM golang:${GOLANG_VERSION}-alpine AS builder
