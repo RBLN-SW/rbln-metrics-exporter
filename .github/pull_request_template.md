@@ -1,16 +1,17 @@
-<!-- Title should follow Conventional Commits: feat: , fix: , docs: , chore: , refactor: , perf: , test:  -->
-# Pull Request Title: [type(scope?): subject]
-<!-- e.g. feat(metrics): add power status metrics -->
+## Summary
 
-## Motivation
-<!-- Why are we making this change? What problem does it solve or feature does it add? -->
+<!-- What problem prompted this PR? What changes for the affected user,
+component, or contributor? Link the relevant issue or design if available. -->
 
-## Summary of Changes
-<!-- A high-level summary of what this PR does. Reference any related issues: “Closes #123” -->
--
--
+## Validation
 
-## Technical Details
-<!-- Describe the implementation details. Include links to commits, issues, design docs if applicable. -->
--
--
+<!-- For each important behavior change, give the test or command and what
+you observed. Link the relevant CI job or run when available.
+For hardware or cluster tests, identify the environment and tested revision
+or image digest. Call out relevant checks that failed or were skipped and why. -->
+
+## Rollout & review notes
+
+<!-- Optional. Remove this section if empty.
+Describe any compatibility impact, required operator action, companion PR,
+or deployment order. If a decision needs review, state the specific question. -->
