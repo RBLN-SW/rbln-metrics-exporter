@@ -14,6 +14,7 @@ type TopologyInfo struct {
 // physical devices, but their resources must not be counted as compute.
 type DeviceInfo struct {
 	UUID                string
+	SID                 string
 	Name                string
 	DeviceID            string
 	Card                string
