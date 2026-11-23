@@ -1,0 +1,7 @@
+schemaVersion: 1
+makeTarget: release-artifact
+imagePlatforms: [linux/amd64, linux/arm64]
+artifacts:
+  - name: metricsExporter
+    kind: image
+    repository: rbln-metrics-exporter

@@ -107,8 +107,11 @@ def request_payload(config, env, pipelines):
     if not slash or not project or "://" in registry or any(c.isspace() for c in registry):
         raise ValueError("HARBOR_REGISTRY must be registry-host/project")
     common = {}
+    digest = env.get("RC_IMAGE_DIGEST", "")
+    if digest and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ValueError("invalid RC image index digest")
     for image in config.get("images", []):
-        common.update(image_env(image["prefix"], host, project + "/" + image["name"], tag))
+        common.update(image_env(image["prefix"], host, project + "/" + image["name"], digest or tag))
     matrix = config.get("matrix", False)
     chart = None
     if matrix:
@@ -155,7 +158,8 @@ def request_payload(config, env, pipelines):
                   if matrix else required(env, "RC_BRANCH"),
         "commit": env.get("PIPER_VALIDATE_COMMIT", "").strip() or "HEAD" if matrix else sha,
         "message": f"rc-validation {tag}",
-        "meta_data": {"rc_tag": tag, "rc_repository": config["repository"], "rc_sha": sha},
+        "meta_data": {"rc_tag": tag, "rc_repository": config["repository"], "rc_sha": sha,
+                      **({"rc_image_digest": digest} if digest else {})},
         "overrides": overrides,
     }
 

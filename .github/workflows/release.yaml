@@ -10,6 +10,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write # GA deletes the "backport release-X.Y.Z" label
@@ -19,6 +23,7 @@ jobs:
   release:
     uses: RBLN-SW/cloud-component-release-kit/.github/workflows/release.yaml@v1
     with:
+      artifact_contract: true
       # Image names under the registry (HARBOR_REGISTRY / DOCKERHUB_REGISTRY),
       # space separated.
       images: rbln-metrics-exporter
@@ -73,6 +78,7 @@ jobs:
           PIPER_TOKEN: ${{ secrets.PIPER_TOKEN }}
           PIPER_RC_BUNDLE_ID: ${{ vars.PIPER_RC_BUNDLE_ID }}
           RC_TAG: ${{ github.ref_name }}
+          RC_IMAGE_DIGEST: ${{ fromJSON(needs.release.outputs.rc_digests).metricsExporter }}
           RC_SHA: ${{ needs.release.outputs.sha }}
           RC_BRANCH: ${{ needs.release.outputs.branch }}
           HARBOR_REGISTRY: ${{ vars.CLOUD_COMPONENT_HARBOR_REGISTRY }}
