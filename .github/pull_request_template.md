@@ -1,17 +1,27 @@
+<!--
+Set the GitHub PR title field using Conventional Commits. The scope is optional.
+Name the specific behavior or workflow that changes.
+Example: fix(plugin): preserve unhealthy state until READY is observed
+
+Write the title only in the title field. Start the submitted PR body with
+`## Summary` and remove the guidance comments.
+-->
+
 ## Summary
 
-<!-- What problem prompted this PR? What changes for the affected user,
-component, or contributor? Link the relevant issue or design if available. -->
+<!-- Start with the problem or need that prompted this change, then describe
+what behaves differently afterward. If a constraint explains why this approach
+was chosen, name it. Link the relevant issue or design when available. -->
 
 ## Validation
 
-<!-- For each important behavior change, give the test or command and what
-you observed. Link the relevant CI job or run when available.
-For hardware or cluster tests, identify the environment and tested revision
-or image digest. Call out relevant checks that failed or were skipped and why. -->
+<!-- Describe what you checked before opening this PR and what you observed.
+Include the command or reproduction steps when useful. For hardware or
+cross-component tests, identify the environment and versions tested together.
+If relevant behavior remains unverified, say what and why. -->
 
-## Rollout & review notes
+## Rollout & compatibility
 
-<!-- Optional. Remove this section if empty.
-Describe any compatibility impact, required operator action, companion PR,
-or deployment order. If a decision needs review, state the specific question. -->
+<!-- Remove this section if there is no compatibility or rollout impact.
+Otherwise, identify the affected versions or companion PR. If action is
+required, state who needs to do what and in which order. -->
